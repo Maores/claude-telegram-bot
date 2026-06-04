@@ -3,9 +3,9 @@
 Ordered steps to take this repo from zero to a 24/7 bot. Commands marked
 **(local)** run on your Windows machine; **(server)** run on the droplet over SSH.
 
-Placeholders to replace: `<YOUR_SERVER_IP>`, `<YOUR_GITHUB_USERNAME>`
-(your git committer shows as `maores`), `<YOUR_REPO_NAME>`, `<YOUR_TOKEN>`,
+Placeholders to replace: `<YOUR_SERVER_IP>`, `<YOUR_TOKEN>`,
 `<YOUR_TELEGRAM_USER_ID>`, `<YOUR_NAME>`, `<YOUR_BOT_USERNAME>`, `<YOUR_REGION>`.
+The GitHub repo is already created at `Maores/claude-telegram-bot` (public).
 
 ---
 
@@ -27,8 +27,10 @@ You now have: bot token, bot username, your Telegram user ID.
   Claude needs ~1 GB RAM.
 - Region: closest to you (e.g. `fra1`).
 - Authentication: **add your SSH public key**.
-  - **(local)** show it: `Get-Content ~/.ssh/id_ed25519.pub`
-  - If you have none: `ssh-keygen -t ed25519` then re-run the line above.
+  - **(local)** show your existing key: `Get-Content ~/.ssh/id_ed25519_chatgpt_bot.pub`
+    — paste its contents into DigitalOcean, or just select it if it's already saved
+    in your account.
+  - To use a fresh key instead: `ssh-keygen -t ed25519`, then show that `.pub`.
 - Create, then copy the droplet's public IP into `<YOUR_SERVER_IP>`.
 
 ---
@@ -87,18 +89,13 @@ bun --version    # confirm it prints a version
 This repo commits **no secrets** (`.env`, `access.json`, history and memory are
 gitignored), so a **public** GitHub repo is the simplest — it clones with no auth.
 
-**(local)** create the repo and push (uses the GitHub CLI you already have):
-
-```powershell
-cd "C:\Users\maor4\OneDrive\Desktop\Telegram bot"
-gh repo create <YOUR_REPO_NAME> --public --source . --remote origin --push
-```
-
-**(server)** clone it into `~/claude-bot`:
+The repo is already created and pushed at
+**https://github.com/Maores/claude-telegram-bot** (public), so there's nothing to do
+locally. **(server)** clone it into `~/claude-bot`:
 
 ```bash
 cd /home/claudebot
-git clone https://github.com/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>.git claude-bot
+git clone https://github.com/Maores/claude-telegram-bot.git claude-bot
 cd claude-bot
 ```
 

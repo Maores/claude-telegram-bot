@@ -1,0 +1,6 @@
+{
+  "dmPolicy": "pairing",
+  "allowFrom": ["<YOUR_TELEGRAM_USER_ID>"],
+  "groups": {},
+  "pending": {}
+}

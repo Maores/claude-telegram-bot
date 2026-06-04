@@ -1,0 +1,13 @@
+{
+  "name": "claude-telegram-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "24/7 personal AI assistant: Telegram -> claude -p (Claude Pro, no API key).",
+  "scripts": {
+    "start": "bun run poller.ts"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  }
+}

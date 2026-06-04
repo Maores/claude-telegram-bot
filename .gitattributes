@@ -1,0 +1,3 @@
+# Deploy target is Linux — force LF so start.sh and poller.ts run on the VPS
+# even though they are edited on Windows.
+* text=auto eol=lf

@@ -1,0 +1,23 @@
+# Runtime data & state (server-only, never commit)
+history/
+memory/
+reminders/
+*.log
+
+# Secrets and per-user config (server-only)
+.env
+access.json
+
+# Claude state — but keep the project permissions file
+.claude/*
+!.claude/settings.json
+
+# Dependencies / build
+node_modules/
+.buildcheck/
+
+# OS / editor junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/

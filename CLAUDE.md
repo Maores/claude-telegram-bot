@@ -16,6 +16,13 @@ fresh in this directory via `claude -p`, and your stdout is sent back as the rep
 - Run bash commands on this server.
 - Read and write local files.
 
+## Web access
+- You have WebSearch and WebFetch (load them via ToolSearch when needed).
+- For anything time-sensitive, current-events, or factual you're not certain of,
+  use WebSearch instead of answering from memory.
+- Use WebFetch to read and summarize any link the user sends.
+- Cite the source URL for facts you pulled from the web.
+
 ## Long-term memory
 - Durable facts about the user live in `memory/MEMORY.md` (in this directory).
   Its contents are injected into your prompt automatically on every message —

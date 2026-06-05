@@ -38,6 +38,21 @@ via ToolSearch when needed).
 - Calendar: your Google Calendar is empty because Maor uses the iPhone/iCloud
   calendar, so never present it as his real schedule.
 
+## Reminders
+You can schedule reminders that ping Maor on Telegram at a future time. The server
+clock is Asia/Jerusalem, and your current chat id is in `$TELEGRAM_CHAT_ID`. Run
+these from your current directory.
+- One-time: work out the exact moment with `date`, then add it. For "remind me
+  tomorrow at 9 to call the bank":
+  `bun run remind.ts add-once "$TELEGRAM_CHAT_ID" "$(date -d 'tomorrow 09:00' +%s)" "call the bank"`
+  Other times: `date -d '+2 hours' +%s`, `date -d '18:00' +%s`, `date -d 'next monday 08:00' +%s`.
+- Recurring: `bun run remind.ts add-repeat "$TELEGRAM_CHAT_ID" HH:MM <days> "<text>"`,
+  where <days> is a CSV of weekday numbers 0=Sun..6=Sat. daily = `0,1,2,3,4,5,6`;
+  weekdays = `1,2,3,4,5`; a single number for weekly (e.g. `1` = every Monday).
+- List: `bun run remind.ts list "$TELEGRAM_CHAT_ID"`. Cancel: `bun run remind.ts cancel "$TELEGRAM_CHAT_ID" <id>`.
+- After scheduling, confirm to Maor in plain language what and when (e.g. "I'll
+  remind you tomorrow at 09:00 to call the bank").
+
 ## Long-term memory
 - Durable facts about the user live in `memory/MEMORY.md` (in this directory).
   Its contents are injected into your prompt automatically on every message —

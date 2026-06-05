@@ -12,6 +12,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { popDue } from "./reminders.ts";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -204,13 +205,13 @@ export function buildPrompt(history: HistoryItem[], name: string, text: string):
 // ---------------------------------------------------------------------------
 
 /** Spawn `claude -p`, feed the prompt on stdin, return stdout. Kills on timeout. */
-async function runClaude(prompt: string): Promise<string> {
+async function runClaude(prompt: string, chatId: number): Promise<string> {
   const proc = Bun.spawn([CLAUDE_BIN, "-p", "--dangerously-skip-permissions"], {
     cwd: PROJECT_DIR,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
-    env: process.env,
+    env: { ...process.env, TELEGRAM_CHAT_ID: String(chatId) },
   });
 
   // Attach readers before writing stdin so a large response can't fill the pipe.
@@ -271,7 +272,7 @@ async function handleMessage(msg: TgMessage) {
 
   try {
     const history = loadHistory(chatId);
-    const answer = (await runClaude(buildPrompt(history, name, text))).trim() || "(no output)";
+    const answer = (await runClaude(buildPrompt(history, name, text), chatId)).trim() || "(no output)";
     await sendReply(chatId, placeholderId, answer);
 
     history.push({ role: "user", content: text }, { role: "assistant", content: answer });
@@ -311,6 +312,28 @@ async function initOffset(): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// Reminder scheduler (fires due reminders on an interval)
+// ---------------------------------------------------------------------------
+
+async function checkReminders() {
+  let due;
+  try {
+    due = popDue();
+  } catch (e: any) {
+    console.error(`[ERR] reminders check: ${e?.message ?? e}`);
+    return;
+  }
+  for (const r of due) {
+    try {
+      await tg("sendMessage", { chat_id: r.chatId, text: `⏰ Reminder: ${r.text}` });
+      console.log(`[REMIND] fired ${r.id} -> ${r.chatId}: ${r.text}`);
+    } catch (e: any) {
+      console.error(`[ERR] send reminder ${r.id}: ${e?.message ?? e}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 
@@ -330,6 +353,10 @@ async function main() {
     process.exit(1);
   }
   console.log(`[BOT] Poller started as @${me.username}`);
+
+  setInterval(() => {
+    void checkReminders();
+  }, 30_000);
 
   let offset = await initOffset();
 

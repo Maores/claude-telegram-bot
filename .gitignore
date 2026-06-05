@@ -2,6 +2,9 @@
 history/
 memory/
 reminders/
+reminders.json
+reminders.test.tmp.json
+*.tmp
 *.log
 
 # Secrets and per-user config (server-only)

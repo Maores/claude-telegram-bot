@@ -6,15 +6,17 @@ Tracker for the Claude Telegram bot — features, bugs, and things to notice.
 - [x] **Streaming responses (Approach A)** — live `💭 thinking…` / `🔍 tool…` status then progressive
   text via `claude -p` stream-json + ~1.5s throttled Telegram edits; handles 4096 overflow and
   "not modified". `stream.ts` parser is unit-tested. Deployed and verified working.
+- [x] **Model routing** — default Sonnet, escalate to Opus via `/opus` (stripped) / `/sonnet` /
+  keywords / code blocks. Cheap explicit+heuristic routing, no LLM classifier. `model.ts` unit-tested.
+  Deployed and verified (noticeably faster default replies).
 
-## In progress
-- [ ] **Model strategy** — moving the default off Opus 4.8 (see "Model strategy" below). Choosing the
-  routing approach.
+## Next up
+- [ ] **iPhone/iCloud calendar** — the last original goal. Two routes to weigh: (a) iCloud **CalDAV**
+  (pure-Apple; needs an Apple app-specific password + a custom script; best "real protocol" story), or
+  (b) lean on a **Google Calendar** the iPhone syncs to (the bot's Google Calendar connector showed
+  "needs-auth", so verify it first). Brainstorm before building.
 
 ## Features / backlog
-- [ ] **Switch main model off Opus 4.8** — see "Model strategy" below. Speed + quota.
-- [ ] iPhone/iCloud calendar via CalDAV (Apple app-specific password + a custom script). The one
-  remaining original goal.
 - [ ] systemd service to replace tmux + `@reboot` cron (`Restart=always`, journald logs).
 - [ ] CI/CD: GitHub Actions runs `bun test` on push, auto-deploys to the VPS on green.
 - [ ] Migrate history + reminders from JSON files to SQLite (schema + migrations; removes the

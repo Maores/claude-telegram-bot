@@ -2,11 +2,14 @@
 
 Tracker for the Claude Telegram bot — features, bugs, and things to notice.
 
+## Done
+- [x] **Streaming responses (Approach A)** — live `💭 thinking…` / `🔍 tool…` status then progressive
+  text via `claude -p` stream-json + ~1.5s throttled Telegram edits; handles 4096 overflow and
+  "not modified". `stream.ts` parser is unit-tested. Deployed and verified working.
+
 ## In progress
-- [ ] **Streaming responses (Approach A)** — show `💭 thinking…` / `🔍 tool…` status, then stream
-  the answer in progressively. Uses `claude -p --output-format stream-json --include-partial-messages`;
-  pushes Telegram message edits on a ~1.5s **throttle** (not per token) to respect edit rate limits;
-  handles the 4096-char overflow (continue in a new message) and `429 retry_after`. Design stage.
+- [ ] **Model strategy** — moving the default off Opus 4.8 (see "Model strategy" below). Choosing the
+  routing approach.
 
 ## Features / backlog
 - [ ] **Switch main model off Opus 4.8** — see "Model strategy" below. Speed + quota.
@@ -42,7 +45,8 @@ classifies each message and escalates to **Opus** only for genuinely hard tasks.
 ## Things to notice (deploy/ops gotchas)
 - Deploy to the server with `git fetch origin && git reset --hard origin/main` — a plain `git pull`
   breaks on line-ending/mode drift in the server's working tree.
-- `git reset --hard` drops `start.sh`'s executable bit → launch via `bash start.sh` (cron uses `/bin/bash`).
+- `start.sh` is committed executable (mode 100755), so resets keep its +x; it's also launched via
+  `bash` and the cron uses `/bin/bash` as belt-and-suspenders.
 - Send multi-line / secret-bearing scripts over SSH base64-encoded (`echo <b64> | base64 -d | bash`);
   piping through PowerShell mangles line endings.
 - College wifi "Braude-Edu 5" blocks outbound port 22; SSH from home/hotspot.

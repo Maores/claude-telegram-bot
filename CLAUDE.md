@@ -53,6 +53,11 @@ these from your current directory.
 - After scheduling, confirm to Maor in plain language what and when (e.g. "I'll
   remind you tomorrow at 09:00 to call the bank").
 
+## Models
+- Maor's messages are routed to a fast model by default; a `/opus` prefix (or saying "think hard")
+  sends that one message to the strongest model. This routing is automatic and happens before you
+  see the message — if Maor asks how to get a deeper/smarter answer, tell him about the `/opus` prefix.
+
 ## Long-term memory
 - Durable facts about the user live in `memory/MEMORY.md` (in this directory).
   Its contents are injected into your prompt automatically on every message —

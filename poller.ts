@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { popDue } from "./reminders.ts";
 import { StreamParser, displayText } from "./stream.ts";
+import { pickModel } from "./model.ts";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -240,9 +241,15 @@ class StreamRenderer {
 
 /** Run `claude -p` in streaming mode and render the reply to Telegram live.
  *  Returns the final answer text. */
-async function streamClaude(prompt: string, chatId: number, placeholderId: number | null): Promise<string> {
+async function streamClaude(
+  prompt: string,
+  chatId: number,
+  placeholderId: number | null,
+  model: string,
+): Promise<string> {
   const proc = Bun.spawn(
-    [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--dangerously-skip-permissions"],
+    // prettier-ignore
+    [CLAUDE_BIN, "-p", "--model", model, "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--dangerously-skip-permissions"],
     {
       cwd: PROJECT_DIR,
       stdin: "pipe",
@@ -337,7 +344,8 @@ async function handleMessage(msg: TgMessage) {
   }
 
   const text = msg.text;
-  console.log(`[MSG] ${name}: ${text}`);
+  const { model, prompt: userMsg } = pickModel(text);
+  console.log(`[MSG] ${name} (${model}): ${userMsg}`);
 
   let placeholderId: number | null = null;
   try {
@@ -348,9 +356,10 @@ async function handleMessage(msg: TgMessage) {
   try {
     const history = loadHistory(chatId);
     const answer =
-      (await streamClaude(buildPrompt(history, name, text), chatId, placeholderId)).trim() || "(no output)";
+      (await streamClaude(buildPrompt(history, name, userMsg), chatId, placeholderId, model)).trim() ||
+      "(no output)";
 
-    history.push({ role: "user", content: text }, { role: "assistant", content: answer });
+    history.push({ role: "user", content: userMsg }, { role: "assistant", content: answer });
     saveHistory(chatId, history);
     console.log(`[DONE] replied to ${fromId}`);
   } catch (e: any) {

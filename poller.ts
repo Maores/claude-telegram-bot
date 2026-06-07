@@ -13,6 +13,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { popDue } from "./reminders.ts";
+import { StreamParser, displayText } from "./stream.ts";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -33,6 +34,7 @@ const ACCESS_FILE =
 const TG_LIMIT = 4096; // Telegram hard limit on message length
 const HISTORY_MAX = 20; // keep last 10 exchanges (user + assistant)
 const POLL_TIMEOUT = 30; // seconds Telegram holds a long-poll open
+const FLUSH_MS = 1500; // min gap between Telegram edits while streaming (rate-limit safe)
 
 // ---------------------------------------------------------------------------
 // Types
@@ -201,25 +203,60 @@ export function buildPrompt(history: HistoryItem[], name: string, text: string):
 }
 
 // ---------------------------------------------------------------------------
-// Claude
+// Claude (streaming)
 // ---------------------------------------------------------------------------
 
-/** Spawn `claude -p`, feed the prompt on stdin, return stdout. Kills on timeout. */
-async function runClaude(prompt: string, chatId: number): Promise<string> {
-  const proc = Bun.spawn([CLAUDE_BIN, "-p", "--dangerously-skip-permissions"], {
-    cwd: PROJECT_DIR,
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, TELEGRAM_CHAT_ID: String(chatId) },
-  });
+/** Edits one or more Telegram messages to mirror the streaming state, spilling
+ *  into extra messages when the text passes Telegram's 4096-char limit. */
+class StreamRenderer {
+  private messages: { id: number; text: string }[] = [];
 
-  // Attach readers before writing stdin so a large response can't fill the pipe.
-  const stdoutP = new Response(proc.stdout).text();
-  const stderrP = new Response(proc.stderr).text();
+  constructor(
+    private chatId: number,
+    placeholderId: number | null,
+  ) {
+    if (placeholderId != null) this.messages.push({ id: placeholderId, text: "⏳" });
+  }
 
+  async render(full: string) {
+    const chunks = chunkText(full || "…", TG_LIMIT);
+    for (let i = 0; i < chunks.length; i++) {
+      const existing = this.messages[i];
+      if (existing) {
+        if (existing.text === chunks[i]) continue;
+        try {
+          await tg("editMessageText", { chat_id: this.chatId, message_id: existing.id, text: chunks[i] });
+        } catch (e: any) {
+          if (!String(e?.message ?? e).includes("not modified")) throw e;
+        }
+        existing.text = chunks[i];
+      } else {
+        const m = await tg("sendMessage", { chat_id: this.chatId, text: chunks[i] });
+        this.messages.push({ id: m.message_id, text: chunks[i] });
+      }
+    }
+  }
+}
+
+/** Run `claude -p` in streaming mode and render the reply to Telegram live.
+ *  Returns the final answer text. */
+async function streamClaude(prompt: string, chatId: number, placeholderId: number | null): Promise<string> {
+  const proc = Bun.spawn(
+    [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--dangerously-skip-permissions"],
+    {
+      cwd: PROJECT_DIR,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, TELEGRAM_CHAT_ID: String(chatId) },
+    },
+  );
+  const stderrP = new Response(proc.stderr).text().catch(() => "");
   proc.stdin!.write(prompt);
   proc.stdin!.end();
+
+  const parser = new StreamParser();
+  const renderer = new StreamRenderer(chatId, placeholderId);
 
   let timedOut = false;
   const killer = setTimeout(() => {
@@ -229,13 +266,51 @@ async function runClaude(prompt: string, chatId: number): Promise<string> {
     } catch {}
   }, CLAUDE_TIMEOUT_MS);
 
-  const [stdout, stderr] = await Promise.all([stdoutP, stderrP]);
-  const code = await proc.exited;
-  clearTimeout(killer);
+  // Throttle Telegram edits — deltas arrive far faster than we may edit.
+  let lastFlush = 0;
+  const flush = async () => {
+    const now = Date.now();
+    if (now - lastFlush < FLUSH_MS) return;
+    lastFlush = now;
+    await renderer
+      .render(displayText(parser.state()))
+      .catch((e) => console.error(`[ERR] render: ${e?.message ?? e}`));
+  };
 
-  if (timedOut) throw new Error(`claude timed out after ${CLAUDE_TIMEOUT_MS}ms`);
-  if (code !== 0) throw new Error(`claude exited ${code}: ${stderr.slice(0, 500)}`);
-  return stdout;
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    for await (const chunk of proc.stdout as any) {
+      buf += decoder.decode(chunk, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        parser.push(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      }
+      await flush();
+    }
+  } finally {
+    clearTimeout(killer);
+  }
+  if (buf.trim()) parser.push(buf);
+
+  const code = await proc.exited;
+  const final = parser.finalText();
+
+  if (timedOut) {
+    if (final) {
+      await renderer.render(final).catch(() => {});
+      return final;
+    }
+    throw new Error(`claude timed out after ${CLAUDE_TIMEOUT_MS}ms`);
+  }
+  if (!final && code !== 0) {
+    throw new Error(`claude exited ${code}: ${(await stderrP).slice(0, 300)}`);
+  }
+  await renderer
+    .render(final || "(no reply)")
+    .catch((e) => console.error(`[ERR] final render: ${e?.message ?? e}`));
+  return final;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,8 +347,8 @@ async function handleMessage(msg: TgMessage) {
 
   try {
     const history = loadHistory(chatId);
-    const answer = (await runClaude(buildPrompt(history, name, text), chatId)).trim() || "(no output)";
-    await sendReply(chatId, placeholderId, answer);
+    const answer =
+      (await streamClaude(buildPrompt(history, name, text), chatId, placeholderId)).trim() || "(no output)";
 
     history.push({ role: "user", content: text }, { role: "assistant", content: answer });
     saveHistory(chatId, history);

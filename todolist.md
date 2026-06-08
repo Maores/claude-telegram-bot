@@ -23,21 +23,38 @@ Tracker for the Claude Telegram bot — features, bugs, and things to notice.
     CLAUDE.md parsed the input as UTC (events landed 3h off). Switched to the offset form
     `date -d '<local>' +%Y-%m-%dT%H:%M:%S%:z` and added `toUtcZ()` so `listEvents` normalizes any input.
 
-## Features / backlog
-- [ ] systemd service to replace tmux + `@reboot` cron (`Restart=always`, journald logs).
-- [ ] CI/CD: GitHub Actions runs `bun test` on push, auto-deploys to the VPS on green.
-- [ ] Migrate history + reminders from JSON files to SQLite (schema + migrations; removes the
-  reminders.json write race).
-- [ ] RAG long-term memory (embed past messages/notes, retrieve relevant context per query).
-- [ ] Voice messages → transcription (Whisper) → reply (optional spoken reply).
-- [ ] Image understanding (send a photo → Claude vision).
-- [ ] Proactive morning briefing (calendar + unread-email summary + news, pushed at 8am).
-- [ ] Multi-user pairing & isolation (use the access.json pairing/groups stub; per-user state).
-- [ ] Observability: structured JSON logs, a `/status` command, basic metrics.
-- [ ] Security hardening: ufw, fail2ban, secrets out of plaintext, prompt-injection test suite.
-- [ ] Usage / cost tracking + per-day rate limiting.
-- [ ] Calendar polish: recurring-event editing (this / this-and-future / all), an explicit default
-  calendar instead of "first event-capable", and optional event reminders/alarms on create.
+## Roadmap (prioritized 2026-06-08)
+Picked from the feature brainstorm. Numbered = urgency order within each group (1 = next up).
+
+### Useful day-to-day
+1. [ ] Voice notes in — Telegram voice message → transcription (Whisper: tiny local model or an API) → reply.
+2. [ ] Photo understanding — send a photo → Claude vision reads/answers. Feasibility check first: getting
+   an image into the headless `claude -p` run.
+3. [ ] PDF & document Q&A — forward a PDF or point at a Drive doc → summarize / answer questions about it.
+4. [ ] Email triage + reply drafting — flag emails that look like they need a reply; draft responses on
+   request (drafts only, Maor sends).
+5. [ ] Spoken replies out — answer with a voice message via TTS (engine or API); pairs with voice-in.
+
+### Smarter memory & data
+1. [ ] RAG long-term memory — embed past chats/notes into a vector store, retrieve relevant bits per query.
+   Needs an embeddings source (small local model or an embedding API; the claude CLI doesn't expose embeddings).
+2. [ ] SQLite migration — move history + reminders + dedupe state from JSON to SQLite (schema + migrations;
+   removes the reminders.json write race; foundation for RAG + metrics).
+3. [ ] Natural-language task list — bot-managed to-dos (add/list/complete/snooze) alongside time reminders.
+
+### Production maturity (engineering signal)
+1. [ ] Security hardening — ufw, fail2ban, secrets out of plaintext, prompt-injection test suite for the
+   email/file "untrusted data" boundary.
+2. [ ] CI/CD (GitHub Actions) — run `bun test` on every push, auto-deploy to the droplet on green.
+3. [ ] Observability — structured JSON logs + a `/status` command (uptime, last error, model usage, metrics).
+
+### Not yet prioritized (from the same brainstorm)
+- [ ] Morning briefing — 8:00 push: calendar + unread-email summary + weather (and optional headlines).
+- [ ] systemd service — replace tmux + `@reboot` cron (`Restart=always`, journald logs, resource limits).
+- [ ] Usage / cost tracking — tokens/cost per message + per day, a `/usage` command, optional daily budget guard.
+- [ ] Multi-user pairing & isolation — access.json pairing/groups stub; per-user history/memory/reminders; invite flow.
+- [ ] Calendar polish — recurring-event editing (this / this-and-future / all), an explicit default calendar,
+  optional event alarms on create.
 
 ## Model strategy (planned)
 Bot currently runs **Opus 4.8 (1M context)** — overkill for a chat bot: slow (~1.9s to first token,

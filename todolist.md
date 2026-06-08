@@ -13,9 +13,10 @@ Tracker for the Claude Telegram bot — features, bugs, and things to notice.
 ## In progress
 - **iPhone/iCloud calendar** (CalDAV via `tsdav` + `node-ical`, built ourselves). Creds in server `.env`
   (`ICLOUD_USER` / `ICLOUD_APP_PASSWORD`). Phases:
-  - [x] Phase 1: connection + read — LIVE & verified (read real events). `calendar.ts` + `cal.ts`, parser tested.
-  - [ ] Phase 2: proactive nudges (~15 min before events) — a poller loop, dedupe by uid+start.
-  - [ ] Phase 3: add / edit / delete events — confirm-first.
+  - [x] Phase 1: connection + read — LIVE & verified. `calendar.ts` + `cal.ts`, parser tested.
+  - [x] Phase 2: proactive nudges (~15 min before events) — LIVE. Poller scans every 5 min, sends
+    `🔔 In N min — <title>`, dedupe via `cal_notified.json`. Live read+select verified.
+  - [ ] Phase 3 (next): add / edit / delete events — confirm-first.
 
 ## Features / backlog
 - [ ] systemd service to replace tmux + `@reboot` cron (`Restart=always`, journald logs).

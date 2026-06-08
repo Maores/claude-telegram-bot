@@ -40,7 +40,10 @@ Picked from the feature brainstorm. Numbered = urgency order within each group (
    Needs an embeddings source (small local model or an embedding API; the claude CLI doesn't expose embeddings).
 2. [ ] SQLite migration — move history + reminders + dedupe state from JSON to SQLite (schema + migrations;
    removes the reminders.json write race; foundation for RAG + metrics).
-3. [ ] Natural-language task list — bot-managed to-dos (add/list/complete/snooze) alongside time reminders.
+3. [ ] Natural-language task list — bot-managed to-dos (add/list/complete/snooze). FEASIBILITY CONFIRMED
+   (2026-06-08): write to the real Apple Reminders list ("תזכורות", a `VTODO` collection) over the same
+   iCloud CalDAV as the calendar, so tasks sync to the iPhone (no silo). Mirrors the calendar plumbing
+   (a `buildVTodo` + create/update/delete). Build the iCloud variant, not a bot-local file. ~M.
 
 ### Production maturity (engineering signal)
 1. [ ] Security hardening — ufw, fail2ban, secrets out of plaintext, prompt-injection test suite for the

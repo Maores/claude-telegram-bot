@@ -7,6 +7,8 @@ import {
   pruneNotified,
   buildVEvent,
   toUtcZ,
+  isRecurring,
+  mergeEvent,
 } from "./calendar.ts";
 
 const TIMED = `BEGIN:VCALENDAR
@@ -191,4 +193,55 @@ test("toUtcZ passes a UTC instant through unchanged", () => {
 
 test("toUtcZ throws on an unparseable date", () => {
   expect(() => toUtcZ("not a date")).toThrow();
+});
+
+// --- edit/delete helpers (phase 3) ---
+
+const WITH_EXTRAS = `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:x@test
+SUMMARY:Meeting
+LOCATION:Room 5
+DESCRIPTION:bring laptop
+DTSTART:20260610T090000Z
+DTEND:20260610T093000Z
+END:VEVENT
+END:VCALENDAR`;
+
+test("parseEvents captures location and description when present", () => {
+  const [e] = parseEvents(WITH_EXTRAS);
+  expect(e.location).toBe("Room 5");
+  expect(e.description).toBe("bring laptop");
+});
+
+test("parseEvents leaves location/description undefined when absent", () => {
+  const [e] = parseEvents(TIMED);
+  expect(e.location).toBeUndefined();
+  expect(e.description).toBeUndefined();
+});
+
+test("isRecurring detects an RRULE and ignores non-recurring events", () => {
+  expect(isRecurring("BEGIN:VEVENT\nRRULE:FREQ=WEEKLY;COUNT=5\nEND:VEVENT")).toBe(true);
+  expect(isRecurring(TIMED)).toBe(false);
+});
+
+test("mergeEvent overrides only patched fields and preserves uid + unset fields", () => {
+  const base = {
+    uid: "m@test",
+    title: "Old",
+    start: new Date("2026-06-10T15:00:00Z"),
+    end: new Date("2026-06-10T16:00:00Z"),
+    allDay: false,
+    location: "A",
+    description: "d",
+  };
+  const merged = mergeEvent(base, { title: "New", start: new Date("2026-06-10T17:00:00Z") }, STAMP);
+  expect(merged.uid).toBe("m@test");
+  expect(merged.title).toBe("New");
+  expect(merged.start.toISOString()).toBe("2026-06-10T17:00:00.000Z");
+  expect(merged.end.toISOString()).toBe("2026-06-10T16:00:00.000Z");
+  expect(merged.location).toBe("A");
+  expect(merged.description).toBe("d");
+  expect(merged.dtstamp).toBe(STAMP);
 });

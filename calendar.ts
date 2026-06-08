@@ -17,6 +17,8 @@ export interface CalEvent {
   end: Date;
   allDay: boolean;
   calendar?: string;
+  location?: string;
+  description?: string;
 }
 
 let clientPromise: ReturnType<typeof createDAVClient> | null = null;
@@ -64,6 +66,8 @@ export function parseEvents(icsString: string, calendarName?: string): CalEvent[
       end,
       allDay: !!allDay,
       calendar: calendarName,
+      location: v.location ? String(v.location) : undefined,
+      description: v.description ? String(v.description) : undefined,
     });
   }
   return events;
@@ -275,4 +279,102 @@ export async function createEvent(
     throw new Error(`server rejected create: ${res.status} ${res.statusText ?? ""}`.trim());
   }
   return { uid, url: res?.url ?? "", calendar: displayName(target) };
+}
+
+// ---------------------------------------------------------------------------
+// Edit / delete (phase 3) — locate an event, then update or remove it.
+// ---------------------------------------------------------------------------
+
+export interface FoundEvent extends CalEvent {
+  url: string;
+  etag?: string;
+  raw: string;
+}
+
+export interface EventPatch {
+  title?: string;
+  start?: Date;
+  end?: Date;
+  allDay?: boolean;
+  location?: string;
+  description?: string;
+}
+
+/** True if the raw iCalendar text carries a recurrence rule. Pure. */
+export function isRecurring(raw: string): boolean {
+  return /(^|\n)RRULE[:;]/.test(raw);
+}
+
+/** Merge a patch onto an event's fields, keeping the uid and any unset fields. Pure. */
+export function mergeEvent(base: CalEvent, patch: EventPatch, dtstamp: Date): EventInput {
+  return {
+    uid: base.uid,
+    title: patch.title ?? base.title,
+    start: patch.start ?? base.start,
+    end: patch.end ?? base.end,
+    allDay: patch.allDay ?? base.allDay,
+    location: patch.location ?? base.location,
+    description: patch.description ?? base.description,
+    dtstamp,
+  };
+}
+
+/** Find events in a range (optionally title-filtered), keeping url/etag/raw for edit & delete. */
+export async function findEvents(
+  fromISO: string,
+  toISO: string,
+  titleQuery?: string,
+): Promise<FoundEvent[]> {
+  const from = toUtcZ(fromISO);
+  const to = toUtcZ(toISO);
+  const c = await client();
+  const calendars = await c.fetchCalendars();
+  const out: FoundEvent[] = [];
+  for (const cal of calendars) {
+    if (cal.components && !cal.components.includes("VEVENT")) continue;
+    let objects: Array<{ data?: any; etag?: string; url: string }> = [];
+    try {
+      objects = await c.fetchCalendarObjects({ calendar: cal, timeRange: { start: from, end: to }, expand: false });
+    } catch (e: any) {
+      console.error(`[CAL] find failed for ${displayName(cal)}: ${e?.message ?? e}`);
+      continue;
+    }
+    for (const o of objects) {
+      if (typeof o.data !== "string") continue;
+      for (const e of parseEvents(o.data, displayName(cal))) {
+        out.push({ ...e, url: o.url, etag: o.etag, raw: o.data });
+      }
+    }
+  }
+  const q = titleQuery?.toLowerCase();
+  const filtered = q ? out.filter((e) => e.title.toLowerCase().includes(q)) : out;
+  return filtered.sort((a, b) => a.start.getTime() - b.start.getTime());
+}
+
+/** Update an event in place (rebuilds from merged fields, keeps the uid). Refuses recurring events. */
+export async function updateEvent(
+  target: FoundEvent,
+  patch: EventPatch,
+  nowMs: number = Date.now(),
+): Promise<void> {
+  if (isRecurring(target.raw)) {
+    throw new Error("that event repeats — edit recurring events on your phone so the series isn't broken");
+  }
+  const iCalString = buildVEvent(mergeEvent(target, patch, new Date(nowMs)));
+  const c = await client();
+  const res: any = await c.updateCalendarObject({
+    calendarObject: { url: target.url, etag: target.etag, data: iCalString },
+  });
+  if (res && res.ok === false) {
+    throw new Error(`server rejected update: ${res.status} ${res.statusText ?? ""}`.trim());
+  }
+}
+
+/** Delete an event by its object url/etag. */
+export async function deleteEvent(target: { url: string; etag?: string }): Promise<void> {
+  const c = await client();
+  const res: any = await c.deleteCalendarObject({ calendarObject: { url: target.url, etag: target.etag } });
+  if (res && res.ok === false) {
+    throw new Error(`server rejected delete: ${res.status} ${res.statusText ?? ""}`.trim());
+  }
 }

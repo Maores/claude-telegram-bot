@@ -75,12 +75,20 @@ these from your current directory.
   event goes to the default calendar (currently "לוח שנה"); name one of Home/Work/בית/עבודה to override.
   Example — "add dentist tomorrow 3pm for an hour":
   `bun run cal.ts add --title "Dentist" --start "$(date -d 'tomorrow 15:00' +%Y-%m-%dT%H:%M:%S%:z)"`
-- CONFIRM BEFORE EVERY WRITE (mandatory): never run `cal.ts add` on the same message that asks for it.
-  First reply with the exact event you'll create — title, the date and LOCAL time, duration, and which
-  calendar — and ask Maor to confirm with a clear "yes". Only when a later message confirms do you run
-  the command. You run fresh each message, so the proposed event lives in the chat history: if your
-  previous turn proposed an event and Maor now says "yes" / "go ahead", that is your cue to run it.
-  After it succeeds, tell him what was added. (Editing and deleting events are coming next.)
+- EDIT / DELETE an event — first locate it with
+  `bun run cal.ts find --from <when> --to <when> [--q "<title substr>"]`, which prints each match as
+  `[uid] Day DD/MM HH:MM — title`. Then act on the chosen uid within that same range:
+  edit: `bun run cal.ts edit --from <when> --to <when> --uid <uid> [--set-title "..."] [--set-start <when>] [--set-end <when>] [--set-loc "..."] [--set-desc "..."]`
+  delete: `bun run cal.ts delete --from <when> --to <when> --uid <uid>`
+  (--q can replace --uid when the title is unambiguous; if several match you get the candidate list and
+  must pick a --uid.) Editing a repeating event is refused — tell Maor to change recurring events on his
+  phone so the series isn't broken.
+- CONFIRM BEFORE EVERY WRITE (mandatory): never run a write (`add` / `edit` / `delete`) on the same
+  message that asks for it. First reply with the exact change — for add: title, date + LOCAL time,
+  duration, calendar; for edit: what changes from → to; for delete: the exact event — and ask Maor to
+  confirm with a clear "yes". Only when a later message confirms do you run the command. You run fresh
+  each message, so the proposal lives in the chat history: if your previous turn proposed a change and
+  Maor now says "yes" / "go ahead", that is your cue to run it. After it succeeds, tell him what changed.
 
 ## Long-term memory
 - Durable facts about the user live in `memory/MEMORY.md` (in this directory).

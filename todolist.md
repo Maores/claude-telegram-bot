@@ -56,14 +56,16 @@ Picked from the feature brainstorm. Numbered = urgency order within each group (
 - [ ] Calendar polish — recurring-event editing (this / this-and-future / all), an explicit default calendar,
   optional event alarms on create.
 
-## Model strategy (planned)
-Bot currently runs **Opus 4.8 (1M context)** — overkill for a chat bot: slow (~1.9s to first token,
-plus a thinking phase) and heavy on the Pro quota (a trivial reply measured ~$0.04-equivalent).
-Plan: make **Sonnet** the default (fast, plenty for chat), and use a cheap **Haiku** router that
-classifies each message and escalates to **Opus** only for genuinely hard tasks.
-- Mechanism: pass `--model <name>` to `claude -p` per message.
-- Open question: is the Haiku pre-classification worth its added latency, vs. just defaulting to
-  Sonnet and letting the user say "use opus for this"? Decide during its design.
+## Model strategy (done)
+Was defaulting to **Opus 4.8 (1M context)** — overkill for a chat bot: slow (~1.9s to first token,
+plus a thinking phase) and heavy on the Pro quota. Now **Sonnet** is the default (fast, plenty for
+chat) and the bot escalates to **Opus** only on explicit/heuristic signals — `/opus`, keywords
+("think hard", "use opus", …), or a fenced code block — via `--model <name>` on `claude -p`.
+- Decision: deliberately did NOT add a Haiku pre-classifier router. Reasoning: a classifier would add a
+  second `claude` startup + connector-init on every message, and that latency would dominate the savings
+  for a chat workload. Cheap explicit+heuristic routing captures nearly all the benefit at no extra cost.
+- Result: noticeably faster default replies and lighter quota use. `model.ts` is unit-tested.
+- (Interview angle: considered the "smart LLM router" design and rejected it on measured-latency grounds.)
 
 ## Bugs & risks
 - [ ] `reminders.json` has a read-modify-write race between the poller and `remind.ts` (mitigated by

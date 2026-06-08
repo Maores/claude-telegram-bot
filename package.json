@@ -9,5 +9,9 @@
   },
   "devDependencies": {
     "bun-types": "latest"
+  },
+  "dependencies": {
+    "node-ical": "^0.26.1",
+    "tsdav": "^2.2.2"
   }
 }

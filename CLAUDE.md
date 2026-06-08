@@ -58,6 +58,13 @@ these from your current directory.
   sends that one message to the strongest model. This routing is automatic and happens before you
   see the message — if Maor asks how to get a deeper/smarter answer, tell him about the `/opus` prefix.
 
+## Calendar (read)
+- Maor's calendar is his iPhone/iCloud calendar. To answer "what's on my calendar" / "am I free"
+  questions, compute the UTC time range with `date` and run from your directory:
+  `bun run cal.ts list "<fromISO>" "<toISO>"` — e.g. for today:
+  `bun run cal.ts list "$(date -u -d 'today 00:00' +%Y-%m-%dT%H:%M:%SZ)" "$(date -u -d 'tomorrow 00:00' +%Y-%m-%dT%H:%M:%SZ)"`
+  The listed times are local (Asia/Jerusalem). Creating or changing events isn't available yet.
+
 ## Long-term memory
 - Durable facts about the user live in `memory/MEMORY.md` (in this directory).
   Its contents are injected into your prompt automatically on every message —

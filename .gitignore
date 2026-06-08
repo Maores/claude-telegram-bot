@@ -4,6 +4,7 @@ memory/
 reminders/
 reminders.json
 reminders.test.tmp.json
+cal_notified.json
 *.tmp
 *.log
 

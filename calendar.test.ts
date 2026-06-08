@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { parseEvents, fmtEvent } from "./calendar.ts";
+import { parseEvents, fmtEvent, nudgeKey, selectUpcoming, pruneNotified } from "./calendar.ts";
 
 const TIMED = `BEGIN:VCALENDAR
 VERSION:2.0
@@ -68,4 +68,34 @@ test("fmtEvent includes the title and a time", () => {
   const s = fmtEvent(e);
   expect(s).toContain("Dentist");
   expect(s).toMatch(/\d\d:\d\d|all day/);
+});
+
+test("nudgeKey is unique per occurrence", () => {
+  expect(nudgeKey({ uid: "x", start: new Date(1_000_000) } as any)).toBe("x@1000000");
+});
+
+test("selectUpcoming picks timed events in the window, excludes all-day and past", () => {
+  const now = 1_000_000_000_000;
+  const mk = (uid: string, offMin: number, allDay = false) =>
+    ({
+      uid,
+      title: uid,
+      start: new Date(now + offMin * 60000),
+      end: new Date(now + offMin * 60000 + 1_800_000),
+      allDay,
+      calendar: "c",
+    }) as any;
+  const events = [mk("past", -5), mk("soon", 10), mk("edge", 15), mk("far", 30), mk("allday", 5, true)];
+  expect(selectUpcoming(events, now, 15).map((e) => e.uid).sort()).toEqual(["edge", "soon"]);
+});
+
+test("pruneNotified drops entries over an hour past", () => {
+  const now = 10_000_000_000;
+  const pruned = pruneNotified(
+    { recent: now - 1000, oldish: now - 30 * 60000, ancient: now - 2 * 3_600_000 },
+    now,
+  );
+  expect(pruned.recent).toBeDefined();
+  expect(pruned.oldish).toBeDefined();
+  expect(pruned.ancient).toBeUndefined();
 });

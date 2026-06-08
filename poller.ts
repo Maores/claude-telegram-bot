@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { popDue } from "./reminders.ts";
 import { StreamParser, displayText } from "./stream.ts";
 import { pickModel } from "./model.ts";
+import { upcomingEvents, nudgeKey, loadNotified, saveNotified, pruneNotified } from "./calendar.ts";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -36,6 +37,8 @@ const TG_LIMIT = 4096; // Telegram hard limit on message length
 const HISTORY_MAX = 20; // keep last 10 exchanges (user + assistant)
 const POLL_TIMEOUT = 30; // seconds Telegram holds a long-poll open
 const FLUSH_MS = 1500; // min gap between Telegram edits while streaming (rate-limit safe)
+const CAL_LEAD_MIN = Number(process.env.CAL_NUDGE_MINUTES ?? 15); // nudge this many minutes before an event
+const CAL_CHECK_MS = Number(process.env.CAL_CHECK_MS ?? 300_000); // how often to scan the calendar
 
 // ---------------------------------------------------------------------------
 // Types
@@ -417,6 +420,40 @@ async function checkReminders() {
   }
 }
 
+/** Nudge the owner ~CAL_LEAD_MIN before each upcoming iCloud event (deduped). */
+async function checkCalendarNudges() {
+  if (!process.env.ICLOUD_USER || !process.env.ICLOUD_APP_PASSWORD) return; // calendar not configured
+  const chatId = Number([...loadAllowList()][0]);
+  if (!Number.isFinite(chatId)) return;
+
+  let events;
+  try {
+    events = await upcomingEvents(CAL_LEAD_MIN);
+  } catch (e: any) {
+    console.error(`[ERR] calendar nudge fetch: ${e?.message ?? e}`);
+    return;
+  }
+  if (!events.length) return;
+
+  const notified = pruneNotified(loadNotified(), Date.now());
+  let changed = false;
+  for (const e of events) {
+    const k = nudgeKey(e);
+    if (notified[k]) continue;
+    const mins = Math.max(1, Math.round((e.start.getTime() - Date.now()) / 60_000));
+    const hhmm = `${String(e.start.getHours()).padStart(2, "0")}:${String(e.start.getMinutes()).padStart(2, "0")}`;
+    try {
+      await tg("sendMessage", { chat_id: chatId, text: `🔔 In ${mins} min — ${e.title} (${hhmm})` });
+      console.log(`[NUDGE] ${k} -> ${chatId}`);
+      notified[k] = e.start.getTime();
+      changed = true;
+    } catch (err: any) {
+      console.error(`[ERR] nudge send: ${err?.message ?? err}`);
+    }
+  }
+  if (changed) saveNotified(notified);
+}
+
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
@@ -441,6 +478,10 @@ async function main() {
   setInterval(() => {
     void checkReminders();
   }, 30_000);
+
+  setInterval(() => {
+    void checkCalendarNudges();
+  }, CAL_CHECK_MS);
 
   let offset = await initOffset();
 

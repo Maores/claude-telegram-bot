@@ -5,6 +5,8 @@
  */
 import { createDAVClient } from "tsdav";
 import ical from "node-ical";
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { join } from "node:path";
 
 const SERVER = "https://caldav.icloud.com";
 
@@ -101,4 +103,49 @@ export function fmtEvent(e: CalEvent): string {
   const day = `${DAYS[d.getDay()]} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
   const time = e.allDay ? "all day" : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return `${day} ${time} — ${e.title}`;
+}
+
+// ---------------------------------------------------------------------------
+// Proactive nudges (phase 2)
+// ---------------------------------------------------------------------------
+
+const NOTIFIED_FILE = process.env.CAL_NOTIFIED_FILE ?? join(import.meta.dir, "cal_notified.json");
+
+/** Unique key per event occurrence (so we nudge each instance once). */
+export function nudgeKey(e: CalEvent): string {
+  return `${e.uid}@${e.start.getTime()}`;
+}
+
+/** Timed events starting within the next `withinMinutes` (excludes all-day & already-started). Pure. */
+export function selectUpcoming(events: CalEvent[], nowMs: number, withinMinutes: number): CalEvent[] {
+  const horizon = nowMs + withinMinutes * 60_000;
+  return events.filter((e) => !e.allDay && e.start.getTime() > nowMs && e.start.getTime() <= horizon);
+}
+
+/** Fetch timed events starting within the next `withinMinutes`. */
+export async function upcomingEvents(withinMinutes: number, nowMs = Date.now()): Promise<CalEvent[]> {
+  const from = new Date(nowMs).toISOString();
+  const to = new Date(nowMs + withinMinutes * 60_000).toISOString();
+  return selectUpcoming(await listEvents(from, to), nowMs, withinMinutes);
+}
+
+export function loadNotified(): Record<string, number> {
+  try {
+    return JSON.parse(readFileSync(NOTIFIED_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+export function saveNotified(map: Record<string, number>) {
+  const tmp = NOTIFIED_FILE + ".tmp";
+  writeFileSync(tmp, JSON.stringify(map));
+  renameSync(tmp, NOTIFIED_FILE);
+}
+/** Drop entries for events more than an hour past, so the file can't grow forever. Pure. */
+export function pruneNotified(map: Record<string, number>, nowMs: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, startMs] of Object.entries(map)) {
+    if (startMs > nowMs - 3_600_000) out[k] = startMs;
+  }
+  return out;
 }

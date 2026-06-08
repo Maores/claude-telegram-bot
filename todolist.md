@@ -10,11 +10,12 @@ Tracker for the Claude Telegram bot — features, bugs, and things to notice.
   keywords / code blocks. Cheap explicit+heuristic routing, no LLM classifier. `model.ts` unit-tested.
   Deployed and verified (noticeably faster default replies).
 
-## Next up
-- [ ] **iPhone/iCloud calendar** — the last original goal. Two routes to weigh: (a) iCloud **CalDAV**
-  (pure-Apple; needs an Apple app-specific password + a custom script; best "real protocol" story), or
-  (b) lean on a **Google Calendar** the iPhone syncs to (the bot's Google Calendar connector showed
-  "needs-auth", so verify it first). Brainstorm before building.
+## In progress
+- **iPhone/iCloud calendar** (CalDAV via `tsdav` + `node-ical`, built ourselves). Creds in server `.env`
+  (`ICLOUD_USER` / `ICLOUD_APP_PASSWORD`). Phases:
+  - [x] Phase 1: connection + read — LIVE & verified (read real events). `calendar.ts` + `cal.ts`, parser tested.
+  - [ ] Phase 2: proactive nudges (~15 min before events) — a poller loop, dedupe by uid+start.
+  - [ ] Phase 3: add / edit / delete events — confirm-first.
 
 ## Features / backlog
 - [ ] systemd service to replace tmux + `@reboot` cron (`Restart=always`, journald logs).

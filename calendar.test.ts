@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { parseEvents, fmtEvent, nudgeKey, selectUpcoming, pruneNotified } from "./calendar.ts";
+import { parseEvents, fmtEvent, nudgeKey, selectUpcoming, pruneNotified, buildVEvent } from "./calendar.ts";
 
 const TIMED = `BEGIN:VCALENDAR
 VERSION:2.0
@@ -98,4 +98,77 @@ test("pruneNotified drops entries over an hour past", () => {
   expect(pruned.recent).toBeDefined();
   expect(pruned.oldish).toBeDefined();
   expect(pruned.ancient).toBeUndefined();
+});
+
+// --- buildVEvent (phase 3: write) ---
+
+const STAMP = new Date("2026-06-08T12:00:00Z");
+
+test("buildVEvent round-trips a timed event through parseEvents", () => {
+  const start = new Date("2026-06-10T15:00:00Z");
+  const end = new Date("2026-06-10T16:00:00Z");
+  const ics = buildVEvent({ uid: "u1@bot", title: "Dentist", start, end, dtstamp: STAMP });
+  const [e] = parseEvents(ics);
+  expect(e.title).toBe("Dentist");
+  expect(e.uid).toBe("u1@bot");
+  expect(e.allDay).toBe(false);
+  expect(e.start.getTime()).toBe(start.getTime());
+  expect(e.end.getTime()).toBe(end.getTime());
+});
+
+test("buildVEvent emits a UTC DTSTART/DTEND for timed events", () => {
+  const ics = buildVEvent({
+    uid: "u2@bot",
+    title: "Call",
+    start: new Date("2026-06-10T15:00:00Z"),
+    end: new Date("2026-06-10T15:30:00Z"),
+    dtstamp: STAMP,
+  });
+  expect(ics).toMatch(/DTSTART:20260610T150000Z/);
+  expect(ics).toMatch(/DTEND:20260610T153000Z/);
+});
+
+test("buildVEvent round-trips an all-day event using VALUE=DATE", () => {
+  const ics = buildVEvent({
+    uid: "u3@bot",
+    title: "Holiday",
+    start: new Date("2026-06-10T00:00:00Z"),
+    end: new Date("2026-06-11T00:00:00Z"),
+    allDay: true,
+    dtstamp: STAMP,
+  });
+  expect(ics).toMatch(/DTSTART;VALUE=DATE:20260610/);
+  const [e] = parseEvents(ics);
+  expect(e.title).toBe("Holiday");
+  expect(e.allDay).toBe(true);
+});
+
+test("buildVEvent escapes commas and semicolons in the title", () => {
+  const title = "Lunch; with A, B";
+  const ics = buildVEvent({
+    uid: "u4@bot",
+    title,
+    start: new Date("2026-06-10T15:00:00Z"),
+    end: new Date("2026-06-10T16:00:00Z"),
+    dtstamp: STAMP,
+  });
+  expect(ics).toContain("SUMMARY:Lunch\\; with A\\, B");
+  const [e] = parseEvents(ics);
+  expect(e.title).toBe(title);
+});
+
+test("buildVEvent includes location/description when given and omits them otherwise", () => {
+  const base = {
+    uid: "u5@bot",
+    title: "Meeting",
+    start: new Date("2026-06-10T15:00:00Z"),
+    end: new Date("2026-06-10T16:00:00Z"),
+    dtstamp: STAMP,
+  };
+  const withExtras = buildVEvent({ ...base, location: "Room 3", description: "bring laptop" });
+  expect(withExtras).toContain("LOCATION:Room 3");
+  expect(withExtras).toContain("DESCRIPTION:bring laptop");
+  const bare = buildVEvent(base);
+  expect(bare).not.toContain("LOCATION:");
+  expect(bare).not.toContain("DESCRIPTION:");
 });

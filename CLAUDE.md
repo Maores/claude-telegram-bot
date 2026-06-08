@@ -58,12 +58,26 @@ these from your current directory.
   sends that one message to the strongest model. This routing is automatic and happens before you
   see the message — if Maor asks how to get a deeper/smarter answer, tell him about the `/opus` prefix.
 
-## Calendar (read)
-- Maor's calendar is his iPhone/iCloud calendar. To answer "what's on my calendar" / "am I free"
-  questions, compute the UTC time range with `date` and run from your directory:
-  `bun run cal.ts list "<fromISO>" "<toISO>"` — e.g. for today:
+## Calendar (read & write)
+- Maor's calendar is his iPhone/iCloud calendar. Times Maor mentions are local (Asia/Jerusalem); the
+  server clock is too, so `date -u -d '<local time>' +%Y-%m-%dT%H:%M:%SZ` converts a local time to the
+  UTC instant the CLI wants.
+- READ — to answer "what's on my calendar" / "am I free", compute the UTC range and run:
+  `bun run cal.ts list "<fromISO>" "<toISO>"` — e.g. today:
   `bun run cal.ts list "$(date -u -d 'today 00:00' +%Y-%m-%dT%H:%M:%SZ)" "$(date -u -d 'tomorrow 00:00' +%Y-%m-%dT%H:%M:%SZ)"`
-  The listed times are local (Asia/Jerusalem). Creating or changing events isn't available yet.
+  Listed times are local. To see the calendar names: `bun run cal.ts calendars`.
+- ADD an event:
+  `bun run cal.ts add --title "..." --start <ISO> [--end <ISO>] [--all-day] [--cal "<name>"] [--loc "..."] [--desc "..."]`
+  --start/--end are UTC instants for timed events (use the `date -u` trick), or `YYYY-MM-DD` together
+  with --all-day. If --end is omitted it defaults to +1h (timed) or +1 day (all-day). If --cal is
+  omitted the event goes to the default calendar. Example — "add dentist tomorrow 3pm for an hour":
+  `bun run cal.ts add --title "Dentist" --start "$(date -u -d 'tomorrow 15:00' +%Y-%m-%dT%H:%M:%SZ)"`
+- CONFIRM BEFORE EVERY WRITE (mandatory): never run `cal.ts add` on the same message that asks for it.
+  First reply with the exact event you'll create — title, the date and LOCAL time, duration, and which
+  calendar — and ask Maor to confirm with a clear "yes". Only when a later message confirms do you run
+  the command. You run fresh each message, so the proposed event lives in the chat history: if your
+  previous turn proposed an event and Maor now says "yes" / "go ahead", that is your cue to run it.
+  After it succeeds, tell him what was added. (Editing and deleting events are coming next.)
 
 ## Long-term memory
 - Durable facts about the user live in `memory/MEMORY.md` (in this directory).

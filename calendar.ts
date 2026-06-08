@@ -149,3 +149,121 @@ export function pruneNotified(map: Record<string, number>, nowMs: number): Recor
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Write (phase 3) — build the iCalendar text, then create on the server.
+// ---------------------------------------------------------------------------
+
+export interface EventInput {
+  uid: string;
+  title: string;
+  start: Date;
+  end: Date;
+  allDay?: boolean;
+  description?: string;
+  location?: string;
+  dtstamp: Date;
+}
+
+/** RFC-5545 TEXT escaping: backslash first, then newlines, semicolons, commas. */
+function escapeText(s: string): string {
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/\r\n|\r|\n/g, "\\n")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,");
+}
+
+/** UTC timestamp form, e.g. 20260610T150000Z. */
+function fmtUTC(d: Date): string {
+  return (
+    String(d.getUTCFullYear()).padStart(4, "0") +
+    pad(d.getUTCMonth() + 1) +
+    pad(d.getUTCDate()) +
+    "T" +
+    pad(d.getUTCHours()) +
+    pad(d.getUTCMinutes()) +
+    pad(d.getUTCSeconds()) +
+    "Z"
+  );
+}
+
+/** Date-only form for all-day events, e.g. 20260610. */
+function fmtDate(d: Date): string {
+  return String(d.getUTCFullYear()).padStart(4, "0") + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate());
+}
+
+/** Build a complete VCALENDAR/VEVENT iCalendar string. Pure — no network. */
+export function buildVEvent(input: EventInput): string {
+  const { uid, title, start, end, allDay, description, location, dtstamp } = input;
+  const lines: string[] = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//maor-telegram-bot//EN",
+    "CALSCALE:GREGORIAN",
+    "BEGIN:VEVENT",
+    `UID:${uid}`,
+    `DTSTAMP:${fmtUTC(dtstamp)}`,
+  ];
+  if (allDay) {
+    lines.push(`DTSTART;VALUE=DATE:${fmtDate(start)}`);
+    lines.push(`DTEND;VALUE=DATE:${fmtDate(end)}`);
+  } else {
+    lines.push(`DTSTART:${fmtUTC(start)}`);
+    lines.push(`DTEND:${fmtUTC(end)}`);
+  }
+  lines.push(`SUMMARY:${escapeText(title)}`);
+  if (location) lines.push(`LOCATION:${escapeText(location)}`);
+  if (description) lines.push(`DESCRIPTION:${escapeText(description)}`);
+  lines.push("END:VEVENT", "END:VCALENDAR");
+  return lines.join("\r\n") + "\r\n";
+}
+
+/** Calendars that can hold events (VEVENT), by display name. */
+export async function listCalendarNames(): Promise<string[]> {
+  const c = await client();
+  const calendars = await c.fetchCalendars();
+  return calendars.filter((cal) => !cal.components || cal.components.includes("VEVENT")).map(displayName);
+}
+
+export interface NewEvent {
+  title: string;
+  start: Date;
+  end: Date;
+  allDay?: boolean;
+  description?: string;
+  location?: string;
+}
+
+export interface CreateResult {
+  uid: string;
+  url: string;
+  calendar: string;
+}
+
+/**
+ * Create an event on the server. Picks the target calendar by name (case-insensitive)
+ * or falls back to the first event-capable calendar. Network — not unit-tested; verify live.
+ */
+export async function createEvent(
+  ev: NewEvent,
+  calendarName?: string,
+  nowMs: number = Date.now(),
+): Promise<CreateResult> {
+  const c = await client();
+  const calendars = (await c.fetchCalendars()).filter(
+    (cal) => !cal.components || cal.components.includes("VEVENT"),
+  );
+  if (!calendars.length) throw new Error("no event-capable calendar found");
+  const target =
+    (calendarName &&
+      calendars.find((cal) => displayName(cal).toLowerCase() === calendarName.toLowerCase())) ||
+    calendars[0];
+  const uid = `${crypto.randomUUID()}@maor-bot`;
+  const iCalString = buildVEvent({ ...ev, uid, dtstamp: new Date(nowMs) });
+  const res: any = await c.createCalendarObject({ calendar: target, filename: `${uid}.ics`, iCalString });
+  if (res && res.ok === false) {
+    throw new Error(`server rejected create: ${res.status} ${res.statusText ?? ""}`.trim());
+  }
+  return { uid, url: res?.url ?? "", calendar: displayName(target) };
+}

@@ -27,13 +27,13 @@ Tracker for the Claude Telegram bot — features, bugs, and things to notice.
 Picked from the feature brainstorm. Numbered = urgency order within each group (1 = next up).
 
 ### Useful day-to-day
-1. [ ] Voice notes in — Telegram voice message → transcription (Whisper: tiny local model or an API) → reply.
-2. [ ] Photo understanding — send a photo → Claude vision reads/answers. Feasibility check first: getting
-   an image into the headless `claude -p` run.
-3. [ ] PDF & document Q&A — forward a PDF or point at a Drive doc → summarize / answer questions about it.
-4. [ ] Email triage + reply drafting — flag emails that look like they need a reply; draft responses on
-   request (drafts only, Maor sends).
-5. [ ] Spoken replies out — answer with a voice message via TTS (engine or API); pairs with voice-in.
+1. [ ] Photo understanding — send a photo → Claude reads/answers via its Read tool (Pro plan, no API).
+   Feasibility check first: confirm headless `claude -p` can see a saved image file.
+2. [ ] PDF & document Q&A — forward a PDF or point at a Drive doc → summarize / answer questions. Shares
+   the "media input" plumbing (receive + download a file) with photo understanding.
+3. [ ] Email triage + reply drafting — flag emails that look like they need a reply; draft responses on
+   request (drafts only, Maor sends). Reuses the nudge-loop pattern.
+4. [ ] Spoken replies out — answer with a voice message via TTS (engine or API). Lower priority.
 
 ### Smarter memory & data
 1. [ ] RAG long-term memory — embed past chats/notes into a vector store, retrieve relevant bits per query.
@@ -52,6 +52,9 @@ Picked from the feature brainstorm. Numbered = urgency order within each group (
 3. [ ] Observability — structured JSON logs + a `/status` command (uptime, last error, model usage, metrics).
 
 ### Not yet prioritized (from the same brainstorm)
+- [ ] Voice notes in (speech→text) — PARKED 2026-06-08: iPhone dictation already turns Maor's speech into
+  text before sending, so the bot needn't transcribe. Researched design on file if revisited (faster-whisper
+  + ivrit.ai `whisper-large-v3-turbo-ct2`, INT8, a warm Python worker, and a ~4GB droplet bump).
 - [ ] Morning briefing — 8:00 push: calendar + unread-email summary + weather (and optional headlines).
 - [ ] systemd service — replace tmux + `@reboot` cron (`Restart=always`, journald logs, resource limits).
 - [ ] Usage / cost tracking — tokens/cost per message + per day, a `/usage` command, optional daily budget guard.

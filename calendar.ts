@@ -69,8 +69,17 @@ export function parseEvents(icsString: string, calendarName?: string): CalEvent[
   return events;
 }
 
-/** Fetch events between two ISO instants (UTC, ...Z) across all the user's calendars. */
+/** Normalize any valid date string (UTC, offset, or local) to a UTC instant. Throws on garbage. Pure. */
+export function toUtcZ(s: string): string {
+  const d = new Date(s);
+  if (isNaN(d.getTime())) throw new Error(`invalid date: ${s}`);
+  return d.toISOString();
+}
+
+/** Fetch events between two instants across all the user's calendars. Inputs may carry any offset. */
 export async function listEvents(fromISO: string, toISO: string): Promise<CalEvent[]> {
+  const from = toUtcZ(fromISO);
+  const to = toUtcZ(toISO);
   const c = await client();
   const calendars = await c.fetchCalendars();
   const out: CalEvent[] = [];
@@ -80,7 +89,7 @@ export async function listEvents(fromISO: string, toISO: string): Promise<CalEve
     try {
       objects = await c.fetchCalendarObjects({
         calendar: cal,
-        timeRange: { start: fromISO, end: toISO },
+        timeRange: { start: from, end: to },
         expand: true,
       });
     } catch (e: any) {

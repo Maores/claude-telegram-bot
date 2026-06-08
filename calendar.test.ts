@@ -1,5 +1,13 @@
 import { test, expect } from "bun:test";
-import { parseEvents, fmtEvent, nudgeKey, selectUpcoming, pruneNotified, buildVEvent } from "./calendar.ts";
+import {
+  parseEvents,
+  fmtEvent,
+  nudgeKey,
+  selectUpcoming,
+  pruneNotified,
+  buildVEvent,
+  toUtcZ,
+} from "./calendar.ts";
 
 const TIMED = `BEGIN:VCALENDAR
 VERSION:2.0
@@ -171,4 +179,16 @@ test("buildVEvent includes location/description when given and omits them otherw
   const bare = buildVEvent(base);
   expect(bare).not.toContain("LOCATION:");
   expect(bare).not.toContain("DESCRIPTION:");
+});
+
+test("toUtcZ converts a local-offset instant to the right UTC instant", () => {
+  expect(toUtcZ("2026-06-09T15:00:00+03:00")).toBe("2026-06-09T12:00:00.000Z");
+});
+
+test("toUtcZ passes a UTC instant through unchanged", () => {
+  expect(toUtcZ("2026-06-09T12:00:00Z")).toBe("2026-06-09T12:00:00.000Z");
+});
+
+test("toUtcZ throws on an unparseable date", () => {
+  expect(() => toUtcZ("not a date")).toThrow();
 });

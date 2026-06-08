@@ -59,19 +59,22 @@ these from your current directory.
   see the message — if Maor asks how to get a deeper/smarter answer, tell him about the `/opus` prefix.
 
 ## Calendar (read & write)
-- Maor's calendar is his iPhone/iCloud calendar. Times Maor mentions are local (Asia/Jerusalem); the
-  server clock is too, so `date -u -d '<local time>' +%Y-%m-%dT%H:%M:%SZ` converts a local time to the
-  UTC instant the CLI wants.
-- READ — to answer "what's on my calendar" / "am I free", compute the UTC range and run:
-  `bun run cal.ts list "<fromISO>" "<toISO>"` — e.g. today:
-  `bun run cal.ts list "$(date -u -d 'today 00:00' +%Y-%m-%dT%H:%M:%SZ)" "$(date -u -d 'tomorrow 00:00' +%Y-%m-%dT%H:%M:%SZ)"`
+- Maor's calendar is his iPhone/iCloud calendar. Times Maor mentions are local (Asia/Jerusalem), and
+  the server clock is Asia/Jerusalem too. To turn a local time into a timestamp the CLI accepts, use
+  `date -d '<local time>' +%Y-%m-%dT%H:%M:%S%:z` — it prints local time WITH its offset (e.g.
+  `2026-06-09T15:00:00+03:00`) and cal.ts converts it to the correct instant. Do NOT use `date -u -d`
+  on a local time: `-u` makes date read the INPUT as UTC, so "15:00" comes out 3h wrong.
+- READ — to answer "what's on my calendar" / "am I free", compute the range and run
+  `bun run cal.ts list "<from>" "<to>"` — e.g. today:
+  `bun run cal.ts list "$(date -d 'today 00:00' +%Y-%m-%dT%H:%M:%S%:z)" "$(date -d 'tomorrow 00:00' +%Y-%m-%dT%H:%M:%S%:z)"`
   Listed times are local. To see the calendar names: `bun run cal.ts calendars`.
 - ADD an event:
-  `bun run cal.ts add --title "..." --start <ISO> [--end <ISO>] [--all-day] [--cal "<name>"] [--loc "..."] [--desc "..."]`
-  --start/--end are UTC instants for timed events (use the `date -u` trick), or `YYYY-MM-DD` together
-  with --all-day. If --end is omitted it defaults to +1h (timed) or +1 day (all-day). If --cal is
-  omitted the event goes to the default calendar. Example — "add dentist tomorrow 3pm for an hour":
-  `bun run cal.ts add --title "Dentist" --start "$(date -u -d 'tomorrow 15:00' +%Y-%m-%dT%H:%M:%SZ)"`
+  `bun run cal.ts add --title "..." --start <when> [--end <when>] [--all-day] [--cal "<name>"] [--loc "..."] [--desc "..."]`
+  --start/--end take that local+offset timestamp for timed events, or a bare `YYYY-MM-DD` together with
+  --all-day. If --end is omitted it defaults to +1h (timed) or +1 day (all-day). If --cal is omitted the
+  event goes to the default calendar (currently "לוח שנה"); name one of Home/Work/בית/עבודה to override.
+  Example — "add dentist tomorrow 3pm for an hour":
+  `bun run cal.ts add --title "Dentist" --start "$(date -d 'tomorrow 15:00' +%Y-%m-%dT%H:%M:%S%:z)"`
 - CONFIRM BEFORE EVERY WRITE (mandatory): never run `cal.ts add` on the same message that asks for it.
   First reply with the exact event you'll create — title, the date and LOCAL time, duration, and which
   calendar — and ask Maor to confirm with a clear "yes". Only when a later message confirms do you run

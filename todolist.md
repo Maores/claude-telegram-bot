@@ -10,13 +10,18 @@ Tracker for the Claude Telegram bot — features, bugs, and things to notice.
   keywords / code blocks. Cheap explicit+heuristic routing, no LLM classifier. `model.ts` unit-tested.
   Deployed and verified (noticeably faster default replies).
 
-## In progress
+## Done (calendar)
 - **iPhone/iCloud calendar** (CalDAV via `tsdav` + `node-ical`, built ourselves). Creds in server `.env`
-  (`ICLOUD_USER` / `ICLOUD_APP_PASSWORD`). Phases:
-  - [x] Phase 1: connection + read — LIVE & verified. `calendar.ts` + `cal.ts`, parser tested.
-  - [x] Phase 2: proactive nudges (~15 min before events) — LIVE. Poller scans every 5 min, sends
-    `🔔 In N min — <title>`, dedupe via `cal_notified.json`. Live read+select verified.
-  - [ ] Phase 3 (next): add / edit / delete events — confirm-first.
+  (`ICLOUD_USER` / `ICLOUD_APP_PASSWORD`). All three phases LIVE & verified against the real calendar:
+  - [x] Phase 1: connection + read. `calendar.ts` + `cal.ts list`, parser tested.
+  - [x] Phase 2: proactive nudges (~15 min before events). Poller scans every 5 min, sends
+    `🔔 In N min — <title>`, dedupe via `cal_notified.json`.
+  - [x] Phase 3: add / edit / delete — confirm-before-write. `cal.ts add/find/edit/delete`;
+    `buildVEvent` (RFC-5545, tested), `createEvent`/`updateEvent`/`deleteEvent`, edit refuses recurring
+    events. Verified live with a create→edit→delete arc on a throwaway event.
+  - [x] Fixed a timezone bug found during Phase 3 testing: the old `date -u -d '<local>'` idiom in
+    CLAUDE.md parsed the input as UTC (events landed 3h off). Switched to the offset form
+    `date -d '<local>' +%Y-%m-%dT%H:%M:%S%:z` and added `toUtcZ()` so `listEvents` normalizes any input.
 
 ## Features / backlog
 - [ ] systemd service to replace tmux + `@reboot` cron (`Restart=always`, journald logs).
@@ -31,6 +36,8 @@ Tracker for the Claude Telegram bot — features, bugs, and things to notice.
 - [ ] Observability: structured JSON logs, a `/status` command, basic metrics.
 - [ ] Security hardening: ufw, fail2ban, secrets out of plaintext, prompt-injection test suite.
 - [ ] Usage / cost tracking + per-day rate limiting.
+- [ ] Calendar polish: recurring-event editing (this / this-and-future / all), an explicit default
+  calendar instead of "first event-capable", and optional event reminders/alarms on create.
 
 ## Model strategy (planned)
 Bot currently runs **Opus 4.8 (1M context)** — overkill for a chat bot: slow (~1.9s to first token,
@@ -45,6 +52,9 @@ classifies each message and escalates to **Opus** only for genuinely hard tasks.
 - [ ] `reminders.json` has a read-modify-write race between the poller and `remind.ts` (mitigated by
   atomic temp+rename writes, not eliminated). The SQLite migration would remove it.
 - [ ] Telegram replies are plain text only (no Markdown rendering) — possible future polish.
+- [ ] Calendar writes are gated only by the bot's confirm-before-write instruction in CLAUDE.md, not
+  enforced in code (fine for a single-user bot). Editing a recurring event is refused; deleting a
+  recurring master would remove the whole series.
 
 ## Things to notice (deploy/ops gotchas)
 - Deploy to the server with `git fetch origin && git reset --hard origin/main` — a plain `git pull`

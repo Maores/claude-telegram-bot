@@ -182,11 +182,12 @@ export function importHistoryJson(db: Database, historyDir: string, now: number)
     | null;
   if (done) return 0;
 
-  let files: string[] = [];
+  let files: string[];
   try {
     files = readdirSync(historyDir).filter((f) => /^\d+\.json$/.test(f));
   } catch {
-    files = [];
+    // Directory unreadable — return without writing the marker so a later run can retry.
+    return 0;
   }
 
   const insert = db.query("INSERT INTO messages (chat_id, role, content, ts, model) VALUES (?, ?, ?, ?, NULL)");

@@ -166,3 +166,19 @@ test("staleByName keeps a recent upload", () => {
 test("staleByName ignores files that aren't timestamp-prefixed uploads", () => {
   expect(staleByName(".gitkeep", 1_000_000_000_000, 1000)).toBe(false);
 });
+
+// --- buildPrompt recall block -------------------------------------------------
+
+test("buildPrompt splices the fenced recall block when recall is present", () => {
+  const prompt = buildPrompt([], "Maor", "what did the bank say?", [
+    { id: 1, role: "assistant", content: "the bank approved the loan", ts: 1_700_000_000 },
+  ]);
+  expect(prompt).toContain("<recalled-context>");
+  expect(prompt).toContain("the bank approved the loan");
+  expect(prompt).toContain("New message from Maor:");
+});
+
+test("buildPrompt omits the recall block when there is no recall", () => {
+  const prompt = buildPrompt([], "Maor", "hello", []);
+  expect(prompt).not.toContain("<recalled-context>");
+});

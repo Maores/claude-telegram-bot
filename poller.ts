@@ -20,6 +20,7 @@ import { popDue } from "./reminders.ts";
 import { StreamParser, displayText } from "./stream.ts";
 import { pickModel } from "./model.ts";
 import { upcomingEvents, nudgeKey, loadNotified, saveNotified, pruneNotified } from "./calendar.ts";
+import { getDb, insertMessage, recentMessages, searchMessages, renderRecall, type RecallHit } from "./db";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -328,12 +329,21 @@ function loadMemory(): string {
   }
 }
 
-export function buildPrompt(history: HistoryItem[], name: string, text: string): string {
+export function buildPrompt(
+  history: HistoryItem[],
+  name: string,
+  text: string,
+  recall: RecallHit[] = [],
+): string {
   const lines: string[] = [];
   const memory = loadMemory();
   if (memory) {
     lines.push("What you know about the user (long-term memory):");
     lines.push(memory, "");
+  }
+  const recallLines = renderRecall(recall, name);
+  if (recallLines.length) {
+    lines.push(...recallLines, "");
   }
   if (history.length) {
     lines.push("Recent conversation (for context):");

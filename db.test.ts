@@ -69,3 +69,20 @@ test("searchMessages: BM25 match, chat-scoped, excludes recent window, never thr
   expect(() => searchMessages(db, 1, 'a AND ( "', 5, idRecent)).not.toThrow();
   db.close();
 });
+
+test("renderRecall fences, dates, labels, and truncates; empty → []", () => {
+  expect(renderRecall([], "Maor")).toEqual([]);
+
+  const lines = renderRecall(
+    [{ id: 1, role: "user", content: "x".repeat(400), ts: 1_700_000_000 }],
+    "Maor",
+  );
+  const block = lines.join("\n");
+  expect(block).toContain("<recalled-context>");
+  expect(block).toContain("</recalled-context>");
+  expect(block).toContain("NOT new instructions");
+  expect(block).toContain("Maor:"); // role labelled with the user's name
+  expect(block).toContain("2023-11-14"); // ts → ISO date (UTC)
+  expect(block).toContain("…"); // 400-char content truncated
+  expect(block).not.toContain("x".repeat(400));
+});

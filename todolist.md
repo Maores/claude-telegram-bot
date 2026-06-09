@@ -23,17 +23,23 @@ Tracker for the Claude Telegram bot — features, bugs, and things to notice.
     CLAUDE.md parsed the input as UTC (events landed 3h off). Switched to the offset form
     `date -d '<local>' +%Y-%m-%dT%H:%M:%S%:z` and added `toUtcZ()` so `listEvents` normalizes any input.
 
+## Done (media input)
+- [x] **Photo & document understanding** — send a photo or document (PDF, etc.) → it's downloaded from
+  Telegram into `./uploads` and its local path handed to Claude, which reads it with its own Read tool
+  (Pro plan, no API). Captions are the accompanying words (still honoring `/opus`); text-only messages
+  unchanged. Shipped via PR #1 plus a hardening pass — pre-download size cap (~20MB) with a clear message,
+  download timeout, delete-after-reply + a startup orphan sweep of `./uploads`, filename injection-hardening,
+  Unicode-safe (Hebrew) on-disk names, and an honest decline/notice for media we can't open (video / voice /
+  audio / GIF / sticker). `poller.ts` helpers unit-tested (16 new tests; suite 70). Deployed and verified live.
+
 ## Roadmap (prioritized 2026-06-08)
 Picked from the feature brainstorm. Numbered = urgency order within each group (1 = next up).
 
 ### Useful day-to-day
-1. [ ] Photo understanding — send a photo → Claude reads/answers via its Read tool (Pro plan, no API).
-   Feasibility check first: confirm headless `claude -p` can see a saved image file.
-2. [ ] PDF & document Q&A — forward a PDF or point at a Drive doc → summarize / answer questions. Shares
-   the "media input" plumbing (receive + download a file) with photo understanding.
-3. [ ] Email triage + reply drafting — flag emails that look like they need a reply; draft responses on
+(Photo understanding + PDF/document Q&A shipped — see "Done (media input)" above.)
+1. [ ] Email triage + reply drafting — flag emails that look like they need a reply; draft responses on
    request (drafts only, Maor sends). Reuses the nudge-loop pattern.
-4. [ ] Spoken replies out — answer with a voice message via TTS (engine or API). Lower priority.
+2. [ ] Spoken replies out — answer with a voice message via TTS (engine or API). Lower priority.
 
 ### Smarter memory & data
 1. [ ] RAG long-term memory — embed past chats/notes into a vector store, retrieve relevant bits per query.

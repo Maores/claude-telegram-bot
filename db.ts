@@ -104,3 +104,37 @@ export function sanitizeFtsQuery(raw: string): string {
   const unique = [...new Set(tokens)].slice(0, 12);
   return unique.map((t) => `"${t}"`).join(" OR ");
 }
+
+/**
+ * Keyword recall: top-`k` past messages matching `query` for `chatId`,
+ * excluding ids ≥ `beforeId` (the recent window already in the prompt) and
+ * inactive rows. Ranked by BM25 (FTS5 `rank`). Returns [] on empty query or
+ * any FTS error.
+ */
+export function searchMessages(
+  db: Database,
+  chatId: number,
+  query: string,
+  k: number,
+  beforeId: number,
+): RecallHit[] {
+  const match = sanitizeFtsQuery(query);
+  if (!match) return [];
+  try {
+    return db
+      .query(
+        `SELECT m.id, m.role, m.content, m.ts
+           FROM messages_fts
+           JOIN messages m ON m.id = messages_fts.rowid
+          WHERE messages_fts MATCH ?
+            AND m.chat_id = ?
+            AND m.active = 1
+            AND m.id < ?
+          ORDER BY rank
+          LIMIT ?`,
+      )
+      .all(match, chatId, beforeId, k) as RecallHit[];
+  } catch {
+    return [];
+  }
+}

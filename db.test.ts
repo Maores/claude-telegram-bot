@@ -47,3 +47,25 @@ test("sanitizeFtsQuery quotes tokens and neutralises FTS5 specials", () => {
   expect(sanitizeFtsQuery("🙂 ?")).toBe("");
   expect(sanitizeFtsQuery("")).toBe("");
 });
+
+test("searchMessages: BM25 match, chat-scoped, excludes recent window, never throws", () => {
+  const db = openDb(":memory:");
+  const base = 1_700_000_000;
+  const id1 = insertMessage(db, { chatId: 1, role: "user", content: "the bank called about my mortgage", ts: base });
+  insertMessage(db, { chatId: 1, role: "assistant", content: "unrelated chit chat", ts: base + 1 });
+  const idRecent = insertMessage(db, { chatId: 1, role: "user", content: "what about the bank again", ts: base + 2 });
+  insertMessage(db, { chatId: 2, role: "user", content: "bank in another chat", ts: base + 3 });
+
+  // beforeId = idRecent ⇒ the recent message itself is excluded; only older hits.
+  const hits = searchMessages(db, 1, "bank", 5, idRecent);
+  expect(hits.map((h) => h.id)).toContain(id1);
+  expect(hits.map((h) => h.id)).not.toContain(idRecent); // excluded window
+  expect(hits.every((h) => h.id !== 4)).toBe(true); // chat 2 never appears
+
+  // No match → [].
+  expect(searchMessages(db, 1, "zzznotpresent", 5, idRecent)).toEqual([]);
+  // Unsanitizable / hostile input → [] (no throw).
+  expect(() => searchMessages(db, 1, "🙂", 5, idRecent)).not.toThrow();
+  expect(() => searchMessages(db, 1, 'a AND ( "', 5, idRecent)).not.toThrow();
+  db.close();
+});

@@ -1,16 +1,20 @@
 /**
  * poller.ts — Telegram long-poll loop that answers messages with `claude -p`.
  *
- * Each incoming text message from an allow-listed user spawns a fresh
+ * Each incoming message from an allow-listed user spawns a fresh
  * `claude -p --dangerously-skip-permissions` process (cwd = this directory, so
  * CLAUDE.md and injected memory apply). Conversation continuity comes from a
  * per-chat history file, not a persistent Claude session.
+ *
+ * Text, photos, and documents are supported: attachments are downloaded from
+ * Telegram into ./uploads and their local path is handed to Claude, which reads
+ * them with its own file tools. Other kinds (voice, stickers, …) are declined.
  *
  * Runs on Bun. Zero npm dependencies.
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { popDue } from "./reminders.ts";
 import { StreamParser, displayText } from "./stream.ts";
@@ -27,6 +31,7 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const CLAUDE_TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS ?? 240_000);
 
 const HISTORY_DIR = process.env.HISTORY_DIR ?? join(PROJECT_DIR, "history");
+const UPLOADS_DIR = process.env.UPLOADS_DIR ?? join(PROJECT_DIR, "uploads");
 const MEMORY_FILE = join(PROJECT_DIR, "memory", "MEMORY.md");
 const OFFSET_FILE = join(HISTORY_DIR, ".offset");
 const ACCESS_FILE =
@@ -49,11 +54,26 @@ interface TgUser {
   first_name?: string;
   username?: string;
 }
+interface TgPhotoSize {
+  file_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}
+interface TgDocument {
+  file_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}
 interface TgMessage {
   message_id: number;
   chat: { id: number };
   from?: TgUser;
   text?: string;
+  caption?: string;
+  photo?: TgPhotoSize[];
+  document?: TgDocument;
 }
 interface TgUpdate {
   update_id: number;
@@ -157,6 +177,41 @@ async function sendReply(chatId: number, placeholderId: number | null, text: str
   for (let i = 1; i < chunks.length; i++) {
     await tg("sendMessage", { chat_id: chatId, text: chunks[i] });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Attachments (photos & documents)
+// ---------------------------------------------------------------------------
+
+/** Download a Telegram file by file_id into ./uploads and return its local path. */
+async function downloadFile(fileId: string, preferredName?: string): Promise<string> {
+  const info = await tg("getFile", { file_id: fileId });
+  const remotePath: string = info.file_path; // e.g. "photos/file_123.jpg"
+  const url = `https://api.telegram.org/file/bot${TOKEN}/${remotePath}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`file download HTTP ${res.status}`);
+  ensureDir(UPLOADS_DIR);
+  const safe = (preferredName || basename(remotePath) || "file").replace(/[^\w.\-]/g, "_");
+  const dest = join(UPLOADS_DIR, `${Date.now()}-${safe}`);
+  await Bun.write(dest, await res.arrayBuffer());
+  return dest;
+}
+
+/** Resolve a photo or document on the message to a local file, if present.
+ *  Returns null for text-only messages and for unsupported kinds. */
+async function resolveAttachment(
+  msg: TgMessage,
+): Promise<{ path: string; kind: string } | null> {
+  if (msg.photo?.length) {
+    // Telegram sends the same photo in ascending sizes; the last is the largest.
+    const largest = msg.photo[msg.photo.length - 1];
+    return { path: await downloadFile(largest.file_id), kind: "an image" };
+  }
+  if (msg.document) {
+    const path = await downloadFile(msg.document.file_id, msg.document.file_name);
+    return { path, kind: msg.document.file_name ? `a file (${msg.document.file_name})` : "a file" };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -334,21 +389,46 @@ async function handleMessage(msg: TgMessage) {
   const name = msg.from.first_name || msg.from.username || fromId;
 
   if (!loadAllowList().has(fromId)) {
-    console.log(`[SKIP] unauthorized ${name} (${fromId}): ${(msg.text ?? "").slice(0, 50)}`);
+    console.log(`[SKIP] unauthorized ${name} (${fromId}): ${(msg.text ?? msg.caption ?? "").slice(0, 50)}`);
     return;
   }
 
-  if (!msg.text) {
+  // Pull down any photo/document; text and captions are the accompanying words.
+  let attachment: { path: string; kind: string } | null = null;
+  try {
+    attachment = await resolveAttachment(msg);
+  } catch (e: any) {
+    console.error(`[ERR] download attachment from ${fromId}: ${e?.message ?? e}`);
     await tg("sendMessage", {
       chat_id: chatId,
-      text: "I can only read text messages right now.",
+      text: "⚠️ I couldn't download that file from Telegram. Please try again.",
     }).catch(() => {});
     return;
   }
 
-  const text = msg.text;
-  const { model, prompt: userMsg } = pickModel(text);
-  console.log(`[MSG] ${name} (${model}): ${userMsg}`);
+  const words = msg.text ?? msg.caption ?? "";
+
+  // Nothing we can read (voice note, sticker, location, …) and no caption.
+  if (!attachment && !words) {
+    await tg("sendMessage", {
+      chat_id: chatId,
+      text: "I can read text, images, and documents (PDFs, etc.) right now — but not this kind of message yet.",
+    }).catch(() => {});
+    return;
+  }
+
+  const { model, prompt: userMsg } = pickModel(words);
+
+  // What Claude sees: the user's words plus a note pointing at the saved file.
+  // What we store in history: a compact placeholder (the file path is transient).
+  let messageForClaude = userMsg;
+  let historyNote = userMsg;
+  if (attachment) {
+    const note = `[The user sent ${attachment.kind}, saved at: ${attachment.path} — open and read it to answer.]`;
+    messageForClaude = userMsg ? `${userMsg}\n\n${note}` : note;
+    historyNote = userMsg ? `[sent ${attachment.kind}] ${userMsg}` : `[sent ${attachment.kind}]`;
+  }
+  console.log(`[MSG] ${name} (${model})${attachment ? ` [${attachment.kind}]` : ""}: ${userMsg || "(no caption)"}`);
 
   let placeholderId: number | null = null;
   try {
@@ -359,10 +439,10 @@ async function handleMessage(msg: TgMessage) {
   try {
     const history = loadHistory(chatId);
     const answer =
-      (await streamClaude(buildPrompt(history, name, userMsg), chatId, placeholderId, model)).trim() ||
+      (await streamClaude(buildPrompt(history, name, messageForClaude), chatId, placeholderId, model)).trim() ||
       "(no output)";
 
-    history.push({ role: "user", content: userMsg }, { role: "assistant", content: answer });
+    history.push({ role: "user", content: historyNote }, { role: "assistant", content: answer });
     saveHistory(chatId, history);
     console.log(`[DONE] replied to ${fromId}`);
   } catch (e: any) {

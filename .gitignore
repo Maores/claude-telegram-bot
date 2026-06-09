@@ -1,5 +1,6 @@
 # Runtime data & state (server-only, never commit)
 history/
+uploads/
 memory/
 reminders/
 reminders.json

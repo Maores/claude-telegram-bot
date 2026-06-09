@@ -36,3 +36,14 @@ test("insertMessage + recentMessages returns last N oldest→newest, active only
   expect(all.map((m) => m.content)).toEqual(["first", "second", "third"]);
   db.close();
 });
+
+test("sanitizeFtsQuery quotes tokens and neutralises FTS5 specials", () => {
+  expect(sanitizeFtsQuery("hello world")).toBe('"hello" OR "world"');
+  // Hyphens/colons/quotes/dots must not survive as operators.
+  expect(sanitizeFtsQuery('claude-code: "v2".')).toBe('"claude" OR "code" OR "v2"');
+  // Hebrew tokens are preserved.
+  expect(sanitizeFtsQuery("שלום עולם")).toBe('"שלום" OR "עולם"');
+  // Nothing usable → empty string (caller skips recall).
+  expect(sanitizeFtsQuery("🙂 ?")).toBe("");
+  expect(sanitizeFtsQuery("")).toBe("");
+});

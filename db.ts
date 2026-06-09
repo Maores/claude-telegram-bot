@@ -91,3 +91,16 @@ export function recentMessages(db: Database, chatId: number, n: number): Message
     .all(chatId, n) as MessageRow[];
   return rows.reverse();
 }
+
+/**
+ * Turn arbitrary user text into a safe FTS5 MATCH expression: keep unicode
+ * letter/number tokens (length ≥ 2), dedupe, cap at 12, quote each so FTS5
+ * special chars (- + " * : ( ) ^ {}) cannot form operators, and OR them.
+ * Returns "" when nothing usable remains.
+ */
+export function sanitizeFtsQuery(raw: string): string {
+  const tokens = (raw.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []).filter((t) => t.length >= 2);
+  if (tokens.length === 0) return "";
+  const unique = [...new Set(tokens)].slice(0, 12);
+  return unique.map((t) => `"${t}"`).join(" OR ");
+}

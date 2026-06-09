@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
-import { openDb, initSchema } from "./db";
+import { openDb, initSchema, insertMessage, recentMessages, sanitizeFtsQuery, searchMessages, renderRecall, importHistoryJson } from "./db";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as pathJoin } from "node:path";
 
 test("openDb creates the schema and is idempotent", () => {
   const db = openDb(":memory:");
@@ -14,5 +17,22 @@ test("openDb creates the schema and is idempotent", () => {
   expect(tables).toContain("messages");
   expect(tables).toContain("messages_fts");
   expect(tables).toContain("meta");
+  db.close();
+});
+
+test("insertMessage + recentMessages returns last N oldest→newest, active only", () => {
+  const db = openDb(":memory:");
+  const base = 1_700_000_000;
+  insertMessage(db, { chatId: 1, role: "user", content: "first", ts: base });
+  insertMessage(db, { chatId: 1, role: "assistant", content: "second", ts: base + 1 });
+  insertMessage(db, { chatId: 1, role: "user", content: "third", ts: base + 2 });
+  // Other chat must not leak in.
+  insertMessage(db, { chatId: 2, role: "user", content: "other-chat", ts: base + 3 });
+
+  const last2 = recentMessages(db, 1, 2);
+  expect(last2.map((m) => m.content)).toEqual(["second", "third"]); // oldest→newest
+
+  const all = recentMessages(db, 1, 50);
+  expect(all.map((m) => m.content)).toEqual(["first", "second", "third"]);
   db.close();
 });

@@ -72,3 +72,22 @@ export function getDb(): Database {
   if (!_db) _db = openDb();
   return _db;
 }
+
+/** Append a message; returns its row id. */
+export function insertMessage(
+  db: Database,
+  m: { chatId: number; role: "user" | "assistant"; content: string; ts: number; model?: string | null },
+): number {
+  const info = db
+    .query("INSERT INTO messages (chat_id, role, content, ts, model) VALUES (?, ?, ?, ?, ?)")
+    .run(m.chatId, m.role, m.content, m.ts, m.model ?? null);
+  return Number(info.lastInsertRowid);
+}
+
+/** Last `n` messages for a chat, oldest→newest. */
+export function recentMessages(db: Database, chatId: number, n: number): MessageRow[] {
+  const rows = db
+    .query("SELECT id, role, content, ts FROM messages WHERE chat_id = ? AND active = 1 ORDER BY id DESC LIMIT ?")
+    .all(chatId, n) as MessageRow[];
+  return rows.reverse();
+}

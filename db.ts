@@ -164,3 +164,52 @@ export function renderRecall(recall: RecallHit[], name: string): string[] {
   lines.push("</recalled-context>");
   return lines;
 }
+
+interface HistoryItemLite {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/**
+ * One-time import of legacy history/<chatId>.json files into `messages`.
+ * Guarded by a `meta` marker so it runs at most once. Best-effort: a corrupt
+ * file is skipped, not fatal. Legacy rows have no real timestamp → use `now`.
+ * Returns the number of messages imported.
+ */
+export function importHistoryJson(db: Database, historyDir: string, now: number): number {
+  const done = db.query("SELECT value FROM meta WHERE key = 'history_imported'").get() as
+    | { value: string }
+    | null;
+  if (done) return 0;
+
+  let files: string[] = [];
+  try {
+    files = readdirSync(historyDir).filter((f) => /^\d+\.json$/.test(f));
+  } catch {
+    files = [];
+  }
+
+  const insert = db.query("INSERT INTO messages (chat_id, role, content, ts, model) VALUES (?, ?, ?, ?, NULL)");
+  let imported = 0;
+  const importOne = db.transaction((chatId: number, items: HistoryItemLite[]) => {
+    for (const it of items) {
+      if (it && (it.role === "user" || it.role === "assistant") && typeof it.content === "string") {
+        insert.run(chatId, it.role, it.content, now);
+        imported++;
+      }
+    }
+  });
+
+  for (const f of files) {
+    const chatId = Number(f.replace(/\.json$/, ""));
+    try {
+      const items = JSON.parse(readFileSync(join(historyDir, f), "utf8"));
+      if (Array.isArray(items)) importOne(chatId, items);
+    } catch {
+      // skip unreadable/corrupt file
+    }
+  }
+
+  db.query("INSERT OR REPLACE INTO meta (key, value) VALUES ('history_imported', ?)").run(String(now));
+  return imported;
+}

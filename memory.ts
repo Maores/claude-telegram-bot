@@ -12,6 +12,9 @@
  * quarantined = held at the trust boundary (never searched/injected).
  */
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { join } from "node:path";
 import { sanitizeFtsQuery } from "./db";
 import { scanThreats } from "./threats";
 
@@ -298,4 +301,51 @@ export function importMemoryMd(db: Database, md: string, now: number): number {
   });
   run();
   return imported;
+}
+
+function sha(s: string): string {
+  return createHash("sha256").update(s).digest("hex");
+}
+
+function renderMirror(db: Database, kind: Kind, title: string): string {
+  const active = listMemory(db, { kind, status: "active" });
+  const quarantined = listMemory(db, { kind, status: "quarantined" });
+  const lines = [`# ${title}`, "", "(auto-generated mirror — edit via mem.ts, not by hand)", ""];
+  for (const r of active) lines.push(`- ${r.content}`);
+  if (quarantined.length) {
+    lines.push("", "## Pending (quarantined) — promote or remove via mem.ts", "");
+    for (const r of quarantined) lines.push(`- [${r.id}] ${r.content}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Export readable mirrors into `dir` (production: memory/mirror/ — never the
+ * live memory/MEMORY.md while the cutover is on hold). Drift guard: if the
+ * on-disk file no longer hash-matches our last export (meta key
+ * mirror_sha_<name>), snapshot it to <name>.bak.<now> before overwriting.
+ */
+export function exportMirror(db: Database, dir: string, now: number): { written: string[]; baks: string[] } {
+  mkdirSync(dir, { recursive: true });
+  const files: [string, Kind, string][] = [
+    ["USER.md", "user", "What the bot knows about Maor"],
+    ["MEMORY.md", "agent", "The bot's own operational notes"],
+  ];
+  const written: string[] = [];
+  const baks: string[] = [];
+  for (const [name, kind, title] of files) {
+    const path = join(dir, name);
+    const metaKey = `mirror_sha_${name}`;
+    const lastSha = (db.query("SELECT value FROM meta WHERE key = ?").get(metaKey) as { value: string } | null)?.value;
+    if (existsSync(path) && lastSha && sha(readFileSync(path, "utf8")) !== lastSha) {
+      const bak = `${path}.bak.${now}`;
+      copyFileSync(path, bak);
+      baks.push(bak);
+    }
+    const content = renderMirror(db, kind, title);
+    writeFileSync(path, content);
+    db.query("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(metaKey, sha(content));
+    written.push(path);
+  }
+  return { written, baks };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { openDb } from "./db";
-import { addMemory, coreChars, listMemory, MemoryError, promoteMemory, removeMemory, replaceMemory, restoreMemory, scrubForContext, searchMemory, showMemory, type MemoryRow } from "./memory";
+import { addMemory, coreChars, importMemoryMd, listMemory, MemoryError, promoteMemory, removeMemory, replaceMemory, restoreMemory, scrubForContext, searchMemory, showMemory, type MemoryRow } from "./memory";
 
 const NOW = 1_781_000_000;
 
@@ -274,6 +274,51 @@ describe("read paths and the load-time scrub", () => {
     expect(listMemory(db, {}).length).toBe(3);
     expect(listMemory(db, { status: "quarantined" }).length).toBe(1);
     expect(listMemory(db, { kind: "agent" }).length).toBe(1);
+    db.close();
+  });
+});
+
+describe("importMemoryMd", () => {
+  const MD = [
+    "# Long-term memory",
+    "",
+    "- Maor studies software engineering at Braude (3 semesters left)",
+    "- Prefers replies in Hebrew",
+    "",
+    "Some loose non-bullet line that is also a fact",
+  ].join("\n");
+
+  test("imports bullets and loose lines as user/maor/active rows, skipping headings and blanks", () => {
+    const db = freshDb();
+    const n = importMemoryMd(db, MD, NOW);
+    expect(n).toBe(3);
+    const rows = db.query("SELECT * FROM memory ORDER BY id").all() as any[];
+    expect(rows.every((r) => r.kind === "user" && r.provenance === "maor" && r.status === "active")).toBe(true);
+    expect(rows[0].content).toContain("Braude");
+    expect(rows[2].content).toContain("loose non-bullet");
+    db.close();
+  });
+
+  test("is budget-exempt: an oversized file still imports fully", () => {
+    const db = freshDb();
+    const big = Array.from({ length: 8 }, (_, i) => `- fact ${i} ${"x".repeat(300)}`).join("\n");
+    expect(importMemoryMd(db, big, NOW)).toBe(8); // 2400+ chars > 1375 budget — still in
+    db.close();
+  });
+
+  test("runs at most once (marker-guarded) and journals each row", () => {
+    const db = freshDb();
+    expect(importMemoryMd(db, MD, NOW)).toBe(3);
+    expect(importMemoryMd(db, MD, NOW)).toBe(0);
+    const j = db.query("SELECT COUNT(1) c FROM journal WHERE action = 'import'").get() as any;
+    expect(j.c).toBe(3);
+    db.close();
+  });
+
+  test("empty file writes the marker and imports nothing", () => {
+    const db = freshDb();
+    expect(importMemoryMd(db, "", NOW)).toBe(0);
+    expect(importMemoryMd(db, "- late fact", NOW)).toBe(0); // marker already set
     db.close();
   });
 });

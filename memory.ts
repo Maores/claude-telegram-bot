@@ -266,3 +266,36 @@ export function showMemory(db: Database, id: number, opts: { raw: boolean }): Me
   if (!row) throw new MemoryError(`no memory entry with id ${id}`);
   return opts.raw ? row : scrubbedCopy(row);
 }
+
+/**
+ * One-time import of the flat MEMORY.md into user-core rows. Takes the file
+ * CONTENT (caller reads the file) so tests stay filesystem-free. Marker-guarded
+ * via meta key 'memory_md_imported'. Budget- and cap-exempt: it must mirror
+ * today's reality without data loss; budgets bite on the NEXT write.
+ */
+export function importMemoryMd(db: Database, md: string, now: number): number {
+  const done = db.query("SELECT value FROM meta WHERE key = 'memory_md_imported'").get();
+  if (done) return 0;
+  const lines = md
+    .split("\n")
+    .map((l) => l.replace(/^\s*[-*]\s+/, "").trim())
+    .filter((l) => l && !l.startsWith("#"));
+  let imported = 0;
+  const run = db.transaction(() => {
+    for (const content of lines) {
+      const id = Number(
+        db.query(
+          "INSERT INTO memory (kind, content, provenance, status, reason, created_ts, updated_ts) VALUES ('user', ?, 'maor', 'active', NULL, ?, ?)",
+        ).run(content, now, now).lastInsertRowid,
+      );
+      journal(db, {
+        ts: now, actor: "import", action: "import", targetTable: "memory",
+        targetId: id, provenance: "maor", before: null, after: getMemory(db, id),
+      });
+      imported++;
+    }
+    db.query("INSERT OR REPLACE INTO meta (key, value) VALUES ('memory_md_imported', ?)").run(String(now));
+  });
+  run();
+  return imported;
+}

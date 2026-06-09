@@ -12,6 +12,7 @@
  * quarantined = held at the trust boundary (never searched/injected).
  */
 import type { Database } from "bun:sqlite";
+import { sanitizeFtsQuery } from "./db";
 import { scanThreats } from "./threats";
 
 export type Kind = "user" | "agent";
@@ -219,4 +220,49 @@ export function promoteMemory(db: Database, id: number, opts: { now: number; act
 
 export function restoreMemory(db: Database, id: number, opts: { now: number; actor?: string }): MemoryRow {
   return transition(db, id, "archived", "restore", opts);
+}
+
+/** Load-time scrub: a row whose content trips the scan renders as a placeholder. */
+export function scrubForContext(row: MemoryRow): string {
+  if (row.content.startsWith("[BLOCKED:")) return row.content;
+  const threats = scanThreats(row.content, "strict");
+  if (!threats.length) return row.content;
+  return `[BLOCKED: entry contained threat pattern(s): ${threats.join(", ")} — id ${row.id}; view raw with mem.ts show ${row.id} --raw, delete with mem.ts remove]`;
+}
+
+function scrubbedCopy(row: MemoryRow): MemoryRow {
+  return { ...row, content: scrubForContext(row) };
+}
+
+/** FTS5/BM25 over active + archived rows (never quarantined), scrubbed. */
+export function searchMemory(db: Database, query: string, k: number): MemoryRow[] {
+  const match = sanitizeFtsQuery(query);
+  if (!match) return [];
+  try {
+    const rows = db
+      .query(
+        `SELECT m.* FROM memory_fts JOIN memory m ON m.id = memory_fts.rowid
+          WHERE memory_fts MATCH ? AND m.status IN ('active','archived')
+          ORDER BY rank LIMIT ?`,
+      )
+      .all(match, k) as MemoryRow[];
+    return rows.map(scrubbedCopy);
+  } catch {
+    return [];
+  }
+}
+
+export function listMemory(db: Database, f: { status?: MemStatus; kind?: Kind }): MemoryRow[] {
+  const where: string[] = [];
+  const args: string[] = [];
+  if (f.status) { where.push("status = ?"); args.push(f.status); }
+  if (f.kind) { where.push("kind = ?"); args.push(f.kind); }
+  const sql = `SELECT * FROM memory${where.length ? " WHERE " + where.join(" AND ") : ""} ORDER BY id`;
+  return (db.query(sql).all(...args) as MemoryRow[]).map(scrubbedCopy);
+}
+
+export function showMemory(db: Database, id: number, opts: { raw: boolean }): MemoryRow {
+  const row = getMemory(db, id);
+  if (!row) throw new MemoryError(`no memory entry with id ${id}`);
+  return opts.raw ? row : scrubbedCopy(row);
 }

@@ -20,7 +20,7 @@ import { popDue } from "./reminders.ts";
 import { StreamParser, displayText } from "./stream.ts";
 import { pickModel } from "./model.ts";
 import { upcomingEvents, nudgeKey, loadNotified, saveNotified, pruneNotified } from "./calendar.ts";
-import { getDb, insertMessage, recentMessages, searchMessages, renderRecall, type RecallHit } from "./db";
+import { getDb, insertMessage, recentMessages, searchMessages, renderRecall, importHistoryJson, type RecallHit } from "./db";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -670,6 +670,12 @@ async function main() {
   }
   ensureDir(HISTORY_DIR);
   ensureDir(join(PROJECT_DIR, "memory"));
+  try {
+    const imported = importHistoryJson(getDb(), HISTORY_DIR, Math.floor(Date.now() / 1000));
+    if (imported) console.log(`[DB] imported ${imported} legacy history messages`);
+  } catch (e: any) {
+    console.error(`[ERR] history import: ${e?.message ?? e}`);
+  }
   sweepUploads();
 
   let me: any;

@@ -192,25 +192,25 @@ export function importHistoryJson(db: Database, historyDir: string, now: number)
 
   const insert = db.query("INSERT INTO messages (chat_id, role, content, ts, model) VALUES (?, ?, ?, ?, NULL)");
   let imported = 0;
-  const importOne = db.transaction((chatId: number, items: HistoryItemLite[]) => {
-    for (const it of items) {
-      if (it && (it.role === "user" || it.role === "assistant") && typeof it.content === "string") {
-        insert.run(chatId, it.role, it.content, now);
-        imported++;
+  const importAll = db.transaction(() => {
+    for (const f of files) {
+      const chatId = Number(f.replace(/\.json$/, ""));
+      try {
+        const items = JSON.parse(readFileSync(join(historyDir, f), "utf8"));
+        if (Array.isArray(items)) {
+          for (const it of items) {
+            if (it && (it.role === "user" || it.role === "assistant") && typeof it.content === "string") {
+              insert.run(chatId, it.role, it.content, now);
+              imported++;
+            }
+          }
+        }
+      } catch {
+        // skip unreadable/corrupt file
       }
     }
+    db.query("INSERT OR REPLACE INTO meta (key, value) VALUES ('history_imported', ?)").run(String(now));
   });
-
-  for (const f of files) {
-    const chatId = Number(f.replace(/\.json$/, ""));
-    try {
-      const items = JSON.parse(readFileSync(join(historyDir, f), "utf8"));
-      if (Array.isArray(items)) importOne(chatId, items);
-    } catch {
-      // skip unreadable/corrupt file
-    }
-  }
-
-  db.query("INSERT OR REPLACE INTO meta (key, value) VALUES ('history_imported', ?)").run(String(now));
+  importAll();
   return imported;
 }

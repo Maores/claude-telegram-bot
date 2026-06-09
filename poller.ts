@@ -312,7 +312,6 @@ function loadAllowList(): Set<string> {
   return new Set(list.map((id) => String(id)));
 }
 
-
 function loadMemory(): string {
   try {
     return readFileSync(MEMORY_FILE, "utf8").trim();
@@ -563,8 +562,13 @@ async function handleMessage(msg: TgMessage) {
       "(no output)";
 
     const now = Math.floor(Date.now() / 1000);
-    insertMessage(db, { chatId, role: "user", content: historyNote, ts: now, model });
-    insertMessage(db, { chatId, role: "assistant", content: answer, ts: now, model });
+    try {
+      insertMessage(db, { chatId, role: "user", content: historyNote, ts: now, model });
+      insertMessage(db, { chatId, role: "assistant", content: answer, ts: now, model });
+    } catch (e: any) {
+      // Reply already delivered; a persistence hiccup must not trigger the error reply.
+      console.error(`[ERR] persist message: ${e?.message ?? e}`);
+    }
     console.log(`[DONE] replied to ${fromId}`);
   } catch (e: any) {
     console.error(`[ERR] handling message from ${fromId}: ${e?.message ?? e}`);

@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, describe } from "bun:test";
 import { openDb, initSchema, insertMessage, recentMessages, sanitizeFtsQuery, searchMessages, renderRecall, importHistoryJson } from "./db";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -163,8 +163,6 @@ test("importHistoryJson does NOT set the done-marker when the directory read fai
   db.close();
 });
 
-import { describe } from "bun:test";
-
 describe("phase 2 schema", () => {
   test("memory, memory_fts and journal tables exist", () => {
     const db = openDb(":memory:");
@@ -175,11 +173,13 @@ describe("phase 2 schema", () => {
     expect(names).toContain("memory");
     expect(names).toContain("memory_fts");
     expect(names).toContain("journal");
+    db.close();
   });
 
   test("initSchema is idempotent with the new tables", () => {
     const db = openDb(":memory:");
     expect(() => initSchema(db)).not.toThrow();
+    db.close();
   });
 
   test("memory_fts stays in sync via triggers", () => {
@@ -196,5 +196,6 @@ describe("phase 2 schema", () => {
     expect(db.query("SELECT rowid FROM memory_fts WHERE memory_fts MATCH 'espresso'").get()).not.toBeNull();
     db.query("DELETE FROM memory WHERE id = ?").run(hit.rowid);
     expect(db.query("SELECT rowid FROM memory_fts WHERE memory_fts MATCH 'espresso'").get()).toBeNull();
+    db.close();
   });
 });

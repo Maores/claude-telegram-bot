@@ -86,3 +86,27 @@ test("renderRecall fences, dates, labels, and truncates; empty → []", () => {
   expect(block).toContain("…"); // 400-char content truncated
   expect(block).not.toContain("x".repeat(400));
 });
+
+test("importHistoryJson imports once, skips corrupt files, is idempotent", () => {
+  const db = openDb(":memory:");
+  const dir = mkdtempSync(pathJoin(tmpdir(), "hist-"));
+  writeFileSync(
+    pathJoin(dir, "42.json"),
+    JSON.stringify([
+      { role: "user", content: "old question" },
+      { role: "assistant", content: "old answer" },
+    ]),
+  );
+  writeFileSync(pathJoin(dir, "99.json"), "{ this is not valid json");
+  writeFileSync(pathJoin(dir, "notes.txt"), "ignored — not <id>.json");
+
+  const n1 = importHistoryJson(db, dir, 1_700_000_000);
+  expect(n1).toBe(2); // two valid items from 42.json; 99.json skipped
+
+  const got = recentMessages(db, 42, 50).map((m) => m.content);
+  expect(got).toEqual(["old question", "old answer"]);
+
+  // Second call is a no-op (marker set).
+  expect(importHistoryJson(db, dir, 1_700_000_001)).toBe(0);
+  db.close();
+});

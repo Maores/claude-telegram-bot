@@ -129,3 +129,58 @@ export function addMemory(db: Database, a: AddArgs): AddResult {
   });
   return { id, status, reason };
 }
+
+/** Resolve a substring to exactly one non-archived row, else throw with candidates. */
+export function resolveBySubstring(db: Database, sub: string): MemoryRow {
+  const needle = sub?.trim();
+  if (!needle) throw new MemoryError("empty match text");
+  const rows = db
+    .query("SELECT * FROM memory WHERE status != 'archived' AND instr(content, ?) > 0 ORDER BY id")
+    .all(needle) as MemoryRow[];
+  if (rows.length === 1) return rows[0];
+  if (rows.length === 0) throw new MemoryError(`no memory entry matches "${needle}"`);
+  const listing = rows.map((r) => `  [${r.id}] ${r.content}`).join("\n");
+  throw new MemoryError(`${rows.length} entries match "${needle}" — be more specific:\n${listing}`);
+}
+
+export interface ReplaceArgs { old: string; new: string; now: number; actor?: string }
+
+export function replaceMemory(db: Database, a: ReplaceArgs): MemoryRow {
+  const target = resolveBySubstring(db, a.old);
+  const content = a.new?.trim();
+  if (!content) throw new MemoryError("replacement content is empty");
+  if (content.length > ENTRY_MAX) {
+    throw new MemoryError(`entry too long (${content.length} > ${ENTRY_MAX} chars) — split or shorten it`);
+  }
+  const threats = scanThreats(content, "strict");
+  const status: MemStatus = threats.length ? "quarantined" : target.status;
+  const reason = threats.length ? `threat scan: ${threats.join(", ")}` : target.reason;
+  if (status === "active") {
+    checkBudget(db, target.kind, content.length - target.content.length);
+  }
+  db.query("UPDATE memory SET content = ?, status = ?, reason = ?, updated_ts = ? WHERE id = ?").run(
+    content, status, reason, a.now, target.id,
+  );
+  const after = getMemory(db, target.id)!;
+  journal(db, {
+    ts: a.now, actor: a.actor ?? "bot", action: "replace", targetTable: "memory",
+    targetId: target.id, provenance: target.provenance, reason, before: target, after,
+  });
+  return after;
+}
+
+export interface RemoveArgs { old: string; reason?: string; now: number; actor?: string }
+
+export function removeMemory(db: Database, a: RemoveArgs): MemoryRow {
+  const target = resolveBySubstring(db, a.old);
+  db.query("UPDATE memory SET status = 'archived', reason = ?, updated_ts = ? WHERE id = ?").run(
+    a.reason ?? target.reason, a.now, target.id,
+  );
+  const after = getMemory(db, target.id)!;
+  journal(db, {
+    ts: a.now, actor: a.actor ?? "bot", action: "remove", targetTable: "memory",
+    targetId: target.id, provenance: target.provenance, reason: a.reason ?? null,
+    before: target, after,
+  });
+  return after;
+}

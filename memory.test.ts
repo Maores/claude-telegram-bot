@@ -68,3 +68,46 @@ describe("addMemory", () => {
     db.close();
   });
 });
+
+describe("core budgets", () => {
+  test("active rows are capped per kind; overflow add is rejected with entry list", () => {
+    const db = freshDb();
+    // Fill the user core close to its budget with 3 entries of 450 chars.
+    for (let i = 0; i < 3; i++) {
+      addMemory(db, { kind: "user", content: `${i}-${"x".repeat(448)}`, source: "maor", now: NOW });
+    }
+    // 1350 used of 1375 — a 100-char add must overflow and throw.
+    let err: MemoryError | null = null;
+    try {
+      addMemory(db, { kind: "user", content: "y".repeat(100), source: "maor", now: NOW });
+    } catch (e) {
+      err = e as MemoryError;
+    }
+    expect(err).toBeInstanceOf(MemoryError);
+    expect(err!.message).toContain("budget");
+    expect(err!.message).toContain("consolidate");
+    expect(err!.message).toContain("0-"); // lists current entries
+    expect(db.query("SELECT COUNT(1) c FROM memory").get()).toEqual({ c: 3 }); // nothing written
+    db.close();
+  });
+
+  test("budgets are per kind: agent core unaffected by a full user core", () => {
+    const db = freshDb();
+    for (let i = 0; i < 3; i++) {
+      addMemory(db, { kind: "user", content: `${i}-${"x".repeat(448)}`, source: "maor", now: NOW });
+    }
+    const r = addMemory(db, { kind: "agent", content: "train site blocks VPS requests", source: "maor", now: NOW });
+    expect(r.status).toBe("active");
+    db.close();
+  });
+
+  test("quarantined adds never consume budget", () => {
+    const db = freshDb();
+    for (let i = 0; i < 3; i++) {
+      addMemory(db, { kind: "user", content: `${i}-${"x".repeat(448)}`, source: "maor", now: NOW });
+    }
+    const r = addMemory(db, { kind: "user", content: "z".repeat(400), source: "derived", now: NOW });
+    expect(r.status).toBe("quarantined"); // no budget error
+    db.close();
+  });
+});

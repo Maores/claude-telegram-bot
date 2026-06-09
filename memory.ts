@@ -61,6 +61,34 @@ export function getMemory(db: Database, id: number): MemoryRow | null {
   return (db.query("SELECT * FROM memory WHERE id = ?").get(id) as MemoryRow) ?? null;
 }
 
+export function budgetFor(kind: Kind): number {
+  return kind === "user" ? USER_BUDGET : AGENT_BUDGET;
+}
+
+/** Sum of active core content chars for a kind. */
+export function coreChars(db: Database, kind: Kind): number {
+  const r = db
+    .query("SELECT COALESCE(SUM(LENGTH(content)), 0) AS n FROM memory WHERE kind = ? AND status = 'active'")
+    .get(kind) as { n: number };
+  return r.n;
+}
+
+/** Throws the consolidate-now error if adding `extra` chars would overflow `kind`'s core. */
+export function checkBudget(db: Database, kind: Kind, extra: number): void {
+  const used = coreChars(db, kind);
+  const budget = budgetFor(kind);
+  if (used + extra <= budget) return;
+  const rows = db
+    .query("SELECT id, content FROM memory WHERE kind = ? AND status = 'active' ORDER BY id")
+    .all(kind) as { id: number; content: string }[];
+  const listing = rows.map((r) => `  [${r.id}] (${r.content.length} ch) ${r.content}`).join("\n");
+  throw new MemoryError(
+    `${kind} core is over budget: ${used} + ${extra} > ${budget} chars. ` +
+      `consolidate now, this turn — merge or remove entries (mem.ts replace/remove), then retry.\n` +
+      `Current ${kind} entries:\n${listing}`,
+  );
+}
+
 export interface AddArgs {
   kind: Kind; content: string; source: Provenance; now: number; actor?: string;
 }
@@ -87,7 +115,7 @@ export function addMemory(db: Database, a: AddArgs): AddResult {
   } else {
     status = "active";
   }
-  // Budget enforcement for active rows is added in Task 4 (checkBudget).
+  if (status === "active") checkBudget(db, a.kind, content.length);
 
   const actor = a.actor ?? "bot";
   const id = Number(

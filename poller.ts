@@ -13,7 +13,7 @@
  * Runs on Bun. Zero npm dependencies.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { popDue } from "./reminders.ts";
@@ -45,6 +45,11 @@ const FLUSH_MS = 1500; // min gap between Telegram edits while streaming (rate-l
 const CAL_LEAD_MIN = Number(process.env.CAL_NUDGE_MINUTES ?? 15); // nudge this many minutes before an event
 const CAL_CHECK_MS = Number(process.env.CAL_CHECK_MS ?? 300_000); // how often to scan the calendar
 
+// Attachments
+export const MAX_FILE_BYTES = Number(process.env.MAX_FILE_BYTES ?? 20 * 1024 * 1024); // Telegram getFile caps bot downloads at ~20MB
+const DOWNLOAD_TIMEOUT_MS = Number(process.env.DOWNLOAD_TIMEOUT_MS ?? 60_000); // give up on a stuck file download
+const UPLOAD_MAX_AGE_MS = Number(process.env.UPLOAD_MAX_AGE_MS ?? 24 * 3600_000); // startup sweep removes orphans older than this
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -66,6 +71,11 @@ interface TgDocument {
   mime_type?: string;
   file_size?: number;
 }
+interface TgFile {
+  file_id: string;
+  file_name?: string;
+  file_size?: number;
+}
 interface TgMessage {
   message_id: number;
   chat: { id: number };
@@ -74,6 +84,13 @@ interface TgMessage {
   caption?: string;
   photo?: TgPhotoSize[];
   document?: TgDocument;
+  // Media we recognize but can't open yet — used only to decline honestly.
+  video?: TgFile;
+  video_note?: TgFile;
+  voice?: TgFile;
+  audio?: TgFile;
+  animation?: TgFile;
+  sticker?: TgFile;
 }
 interface TgUpdate {
   update_id: number;
@@ -183,35 +200,103 @@ async function sendReply(chatId: number, placeholderId: number | null, text: str
 // Attachments (photos & documents)
 // ---------------------------------------------------------------------------
 
+/** True when a known file size is over the cap. Unknown size → let it try
+ *  (Telegram still rejects >20MB at getFile, caught as a download error). */
+export function isTooLarge(size: number | undefined, max = MAX_FILE_BYTES): boolean {
+  return size != null && size > max;
+}
+
+/** Sanitize a name into a single on-disk path segment. Unicode-aware, so Hebrew
+ *  and other scripts survive; strips separators and risky punctuation. The caller
+ *  always prepends a timestamp, so even a bare ".." can't traverse out of uploads/. */
+export function safeDiskName(name: string): string {
+  return name.replace(/[^\p{L}\p{N}._-]/gu, "_") || "file";
+}
+
+/** Strip characters that would let a filename break out of the bracketed note we
+ *  hand to Claude — defense-in-depth against prompt injection via the file name. */
+function displayName(name: string): string {
+  return name.replace(/[[\]\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 100);
+}
+
+/** Describe the readable attachment (photo or document) on a message WITHOUT
+ *  downloading it, so the caller can size-check first. Null if there is none. */
+export function attachmentInfo(
+  msg: TgMessage,
+): { fileId: string; name?: string; size?: number; kind: string } | null {
+  if (msg.photo?.length) {
+    // Telegram sends the same photo in ascending sizes; the last is the largest.
+    const largest = msg.photo[msg.photo.length - 1];
+    return { fileId: largest.file_id, size: largest.file_size, kind: "an image" };
+  }
+  if (msg.document) {
+    const shown = msg.document.file_name ? displayName(msg.document.file_name) : "";
+    return {
+      fileId: msg.document.file_id,
+      name: msg.document.file_name,
+      size: msg.document.file_size,
+      kind: shown ? `a file (${shown})` : "a file",
+    };
+  }
+  return null;
+}
+
+/** Human label for media we recognize but can't open, else null. */
+export function unsupportedMediaKind(msg: TgMessage): string | null {
+  if (msg.video) return "a video";
+  if (msg.video_note) return "a video note";
+  if (msg.voice) return "a voice message";
+  if (msg.audio) return "an audio file";
+  if (msg.animation) return "a GIF";
+  if (msg.sticker) return "a sticker";
+  return null;
+}
+
 /** Download a Telegram file by file_id into ./uploads and return its local path. */
 async function downloadFile(fileId: string, preferredName?: string): Promise<string> {
   const info = await tg("getFile", { file_id: fileId });
   const remotePath: string = info.file_path; // e.g. "photos/file_123.jpg"
   const url = `https://api.telegram.org/file/bot${TOKEN}/${remotePath}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`file download HTTP ${res.status}`);
   ensureDir(UPLOADS_DIR);
-  const safe = (preferredName || basename(remotePath) || "file").replace(/[^\w.\-]/g, "_");
+  const safe = safeDiskName(preferredName || basename(remotePath));
   const dest = join(UPLOADS_DIR, `${Date.now()}-${safe}`);
   await Bun.write(dest, await res.arrayBuffer());
   return dest;
 }
 
-/** Resolve a photo or document on the message to a local file, if present.
- *  Returns null for text-only messages and for unsupported kinds. */
-async function resolveAttachment(
-  msg: TgMessage,
-): Promise<{ path: string; kind: string } | null> {
-  if (msg.photo?.length) {
-    // Telegram sends the same photo in ascending sizes; the last is the largest.
-    const largest = msg.photo[msg.photo.length - 1];
-    return { path: await downloadFile(largest.file_id), kind: "an image" };
+/** Best-effort delete of a downloaded upload once we're done answering. */
+function cleanupFile(path: string | undefined) {
+  if (!path) return;
+  try {
+    rmSync(path, { force: true });
+  } catch (e: any) {
+    console.error(`[ERR] cleanup ${path}: ${e?.message ?? e}`);
   }
-  if (msg.document) {
-    const path = await downloadFile(msg.document.file_id, msg.document.file_name);
-    return { path, kind: msg.document.file_name ? `a file (${msg.document.file_name})` : "a file" };
+}
+
+/** True if an uploads/ entry is one of our timestamp-prefixed files and older
+ *  than maxAgeMs. Names that don't match the pattern are left untouched. */
+export function staleByName(filename: string, now: number, maxAgeMs: number): boolean {
+  const m = /^(\d+)-/.exec(filename);
+  if (!m) return false;
+  return now - Number(m[1]) > maxAgeMs;
+}
+
+/** Sweep orphaned uploads left behind by a crash mid-handling (runs at startup). */
+function sweepUploads(maxAgeMs = UPLOAD_MAX_AGE_MS) {
+  if (!existsSync(UPLOADS_DIR)) return;
+  const now = Date.now();
+  let removed = 0;
+  for (const name of readdirSync(UPLOADS_DIR)) {
+    if (!staleByName(name, now, maxAgeMs)) continue;
+    try {
+      rmSync(join(UPLOADS_DIR, name), { force: true });
+      removed++;
+    } catch {}
   }
-  return null;
+  if (removed) console.log(`[UPLOADS] swept ${removed} stale file(s)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -393,33 +478,49 @@ async function handleMessage(msg: TgMessage) {
     return;
   }
 
-  // Pull down any photo/document; text and captions are the accompanying words.
-  let attachment: { path: string; kind: string } | null = null;
-  try {
-    attachment = await resolveAttachment(msg);
-  } catch (e: any) {
-    console.error(`[ERR] download attachment from ${fromId}: ${e?.message ?? e}`);
+  const words = msg.text ?? msg.caption ?? "";
+
+  // Identify a readable photo/document before downloading, so we can reject an
+  // oversize file with an honest message instead of a doomed "try again".
+  const info = attachmentInfo(msg);
+  if (info && isTooLarge(info.size)) {
     await tg("sendMessage", {
       chat_id: chatId,
-      text: "⚠️ I couldn't download that file from Telegram. Please try again.",
+      text: "That file is too large for me to fetch — Telegram caps bot downloads at ~20 MB.",
     }).catch(() => {});
     return;
   }
 
-  const words = msg.text ?? msg.caption ?? "";
+  // Pull it down; text and captions are the accompanying words.
+  let attachment: { path: string; kind: string } | null = null;
+  if (info) {
+    try {
+      attachment = { path: await downloadFile(info.fileId, info.name), kind: info.kind };
+    } catch (e: any) {
+      console.error(`[ERR] download attachment from ${fromId}: ${e?.message ?? e}`);
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: "⚠️ I couldn't download that file from Telegram. Please try again.",
+      }).catch(() => {});
+      return;
+    }
+  }
 
-  // Nothing we can read (voice note, sticker, location, …) and no caption.
+  // Media we recognize but can't open (video, voice, audio, GIF, sticker, …).
+  const unsupported = attachment ? null : unsupportedMediaKind(msg);
+
+  // Nothing readable and nothing said → polite, specific decline.
   if (!attachment && !words) {
-    await tg("sendMessage", {
-      chat_id: chatId,
-      text: "I can read text, images, and documents (PDFs, etc.) right now — but not this kind of message yet.",
-    }).catch(() => {});
+    const text = unsupported
+      ? `I can't open ${unsupported} yet — I can read text, images, and documents (PDFs, etc.).`
+      : "I can read text, images, and documents (PDFs, etc.) right now — but not this kind of message yet.";
+    await tg("sendMessage", { chat_id: chatId, text }).catch(() => {});
     return;
   }
 
   const { model, prompt: userMsg } = pickModel(words);
 
-  // What Claude sees: the user's words plus a note pointing at the saved file.
+  // What Claude sees: the user's words plus a note about the media.
   // What we store in history: a compact placeholder (the file path is transient).
   let messageForClaude = userMsg;
   let historyNote = userMsg;
@@ -427,8 +528,14 @@ async function handleMessage(msg: TgMessage) {
     const note = `[The user sent ${attachment.kind}, saved at: ${attachment.path} — open and read it to answer.]`;
     messageForClaude = userMsg ? `${userMsg}\n\n${note}` : note;
     historyNote = userMsg ? `[sent ${attachment.kind}] ${userMsg}` : `[sent ${attachment.kind}]`;
+  } else if (unsupported) {
+    // We have a caption but couldn't read the media — be honest with Claude.
+    const note = `[The user also sent ${unsupported}, which you can't open. Answer from their words, and say you couldn't view the ${unsupported} if it matters.]`;
+    messageForClaude = `${userMsg}\n\n${note}`;
+    historyNote = `[sent ${unsupported}] ${userMsg}`;
   }
-  console.log(`[MSG] ${name} (${model})${attachment ? ` [${attachment.kind}]` : ""}: ${userMsg || "(no caption)"}`);
+  const label = attachment?.kind ?? unsupported;
+  console.log(`[MSG] ${name} (${model})${label ? ` [${label}]` : ""}: ${userMsg || "(no caption)"}`);
 
   let placeholderId: number | null = null;
   try {
@@ -452,6 +559,10 @@ async function handleMessage(msg: TgMessage) {
       placeholderId,
       "⚠️ Sorry, something went wrong handling that. Please try again.",
     ).catch(() => {});
+  } finally {
+    // The saved file is transient — Claude has read it by now, so don't let
+    // uploads/ grow without bound.
+    cleanupFile(attachment?.path);
   }
 }
 
@@ -545,6 +656,7 @@ async function main() {
   }
   ensureDir(HISTORY_DIR);
   ensureDir(join(PROJECT_DIR, "memory"));
+  sweepUploads();
 
   let me: any;
   try {

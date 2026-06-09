@@ -5,8 +5,9 @@
  * patterns reimplemented for JS regex; hermes-specific paths replaced with
  * this bot's sensitive paths. Scope semantics preserved:
  *   "all" subset of "context" subset of "strict"; memory writes + loads scan at "strict".
- * Patterns anchor on attack vocabulary, not bossy English, and use
- * (?:\w+\s+)* between key tokens so filler words cannot bypass them.
+ * Patterns anchor on attack vocabulary, not bossy English. Filler-word matching
+ * uses [\p{L}\p{N}_] (not \w) with the /u flag so non-ASCII fillers such as
+ * Hebrew or French words cannot bypass the patterns either.
  */
 
 export type ThreatScope = "all" | "context" | "strict";
@@ -15,32 +16,32 @@ type Pattern = [RegExp, string, ThreatScope];
 
 const PATTERNS: Pattern[] = [
   // Classic prompt injection (everywhere)
-  [/ignore\s+(?:\w+\s+)*(?:previous|all|above|prior)\s+(?:\w+\s+)*instructions/i, "prompt_injection", "all"],
+  [/ignore\s+(?:[\p{L}\p{N}_]+\s+)*(?:previous|all|above|prior)\s+(?:[\p{L}\p{N}_]+\s+)*instructions/iu, "prompt_injection", "all"],
   [/system\s+prompt\s+override/i, "sys_prompt_override", "all"],
-  [/disregard\s+(?:\w+\s+)*(?:your|all|any)\s+(?:\w+\s+)*(?:instructions|rules|guidelines)/i, "disregard_rules", "all"],
-  [/act\s+as\s+(?:if|though)\s+(?:\w+\s+)*you\s+(?:\w+\s+)*(?:have\s+no|don't\s+have)\s+(?:\w+\s+)*(?:restrictions|limits|rules)/i, "bypass_restrictions", "all"],
+  [/disregard\s+(?:[\p{L}\p{N}_]+\s+)*(?:your|all|any)\s+(?:[\p{L}\p{N}_]+\s+)*(?:instructions|rules|guidelines)/iu, "disregard_rules", "all"],
+  [/act\s+as\s+(?:if|though)\s+(?:[\p{L}\p{N}_]+\s+)*you\s+(?:[\p{L}\p{N}_]+\s+)*(?:have\s+no|don't\s+have)\s+(?:[\p{L}\p{N}_]+\s+)*(?:restrictions|limits|rules)/iu, "bypass_restrictions", "all"],
   [/<!--[^>]*(?:ignore|override|system|secret|hidden)[^>]*-->/i, "html_comment_injection", "all"],
   [/<\s*div\s+style\s*=\s*["'][\s\S]*?display\s*:\s*none/i, "hidden_div", "all"],
   [/translate\s+.*\s+into\s+.*\s+and\s+(?:execute|run|eval)/i, "translate_execute", "all"],
-  [/do\s+not\s+(?:\w+\s+)*tell\s+(?:\w+\s+)*the\s+user/i, "deception_hide", "all"],
+  [/do\s+not\s+(?:[\p{L}\p{N}_]+\s+)*tell\s+(?:[\p{L}\p{N}_]+\s+)*the\s+user/iu, "deception_hide", "all"],
 
   // Role-play / identity hijack (context + strict)
-  [/you\s+are\s+(?:\w+\s+)*now\s+(?:a|an|the)\s+/i, "role_hijack", "context"],
-  [/pretend\s+(?:\w+\s+)*(?:you\s+are|to\s+be)\s+/i, "role_pretend", "context"],
-  [/output\s+(?:\w+\s+)*(?:system|initial)\s+prompt/i, "leak_system_prompt", "context"],
-  [/(?:respond|answer|reply)\s+without\s+(?:\w+\s+)*(?:restrictions|limitations|filters|safety)/i, "remove_filters", "context"],
-  [/you\s+have\s+been\s+(?:\w+\s+)*(?:updated|upgraded|patched)\s+to/i, "fake_update", "context"],
-  [/\bname\s+yourself\s+\w+/i, "identity_override", "context"],
+  [/you\s+are\s+(?:[\p{L}\p{N}_]+\s+)*now\s+(?:a|an|the)\s+/iu, "role_hijack", "context"],
+  [/pretend\s+(?:[\p{L}\p{N}_]+\s+)*(?:you\s+are|to\s+be)\s+/iu, "role_pretend", "context"],
+  [/output\s+(?:[\p{L}\p{N}_]+\s+)*(?:system|initial)\s+prompt/iu, "leak_system_prompt", "context"],
+  [/(?:respond|answer|reply)\s+without\s+(?:[\p{L}\p{N}_]+\s+)*(?:restrictions|limitations|filters|safety)/iu, "remove_filters", "context"],
+  [/you\s+have\s+been\s+(?:[\p{L}\p{N}_]+\s+)*(?:updated|upgraded|patched)\s+to/iu, "fake_update", "context"],
+  [/\bname\s+yourself\s+[\p{L}\p{N}_]+/iu, "identity_override", "context"],
 
   // C2 / promptware (context)
   [/register\s+(?:as\s+)?a?\s*node/i, "c2_node_registration", "context"],
   [/(?:heartbeat|beacon|check[\s-]?in)\s+(?:to|with)\s+/i, "c2_heartbeat", "context"],
   [/pull\s+(?:down\s+)?(?:new\s+)?task(?:ing|s)?\b/i, "c2_task_pull", "context"],
   [/connect\s+to\s+the\s+network\b/i, "c2_network_connect", "context"],
-  [/you\s+must\s+(?:\w+\s+){0,3}(?:register|connect|report|beacon)\b/i, "forced_action", "context"],
+  [/you\s+must\s+(?:[\p{L}\p{N}_]+\s+){0,3}(?:register|connect|report|beacon)\b/iu, "forced_action", "context"],
   [/only\s+use\s+one[\s-]?liners?\b/i, "anti_forensic_oneliner", "context"],
-  [/never\s+(?:\w+\s+)*(?:create|write)\s+(?:\w+\s+)*(?:script|file)\s+(?:\w+\s+)*disk/i, "anti_forensic_disk", "context"],
-  [/unset\s+\w*(?:CLAUDE|CODEX|HERMES|AGENT|OPENAI|ANTHROPIC)\w*/i, "env_var_unset_agent", "context"],
+  [/never\s+(?:[\p{L}\p{N}_]+\s+)*(?:create|write)\s+(?:[\p{L}\p{N}_]+\s+)*(?:script|file)\s+(?:[\p{L}\p{N}_]+\s+)*disk/iu, "anti_forensic_disk", "context"],
+  [/unset\s+[\p{L}\p{N}_]*(?:CLAUDE|CODEX|HERMES|AGENT|OPENAI|ANTHROPIC)[\p{L}\p{N}_]*/iu, "env_var_unset_agent", "context"],
 
   // Known C2 / red-team framework names (context)
   [/\b(?:praxis|cobalt\s*strike|sliver|havoc|mythic|metasploit|brainworm)\b/i, "known_c2_framework", "context"],
@@ -48,17 +49,17 @@ const PATTERNS: Pattern[] = [
   [/\bcommand\s+and\s+control\b/i, "c2_explicit_long", "context"],
 
   // Exfiltration (curl/wget everywhere; URL-send + context dumps strict)
-  [/curl\s+[^\n]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/i, "exfil_curl", "all"],
-  [/wget\s+[^\n]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/i, "exfil_wget", "all"],
+  [/curl\s+[^\n]*\$\{?[\p{L}\p{N}_]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/iu, "exfil_curl", "all"],
+  [/wget\s+[^\n]*\$\{?[\p{L}\p{N}_]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/iu, "exfil_wget", "all"],
   [/cat\s+[^\n]*(?:\.env|credentials|\.netrc|\.pgpass|\.npmrc|\.pypirc)/i, "read_secrets", "all"],
   [/(?:send|post|upload|transmit)\s+.*\s+(?:to|at)\s+https?:\/\//i, "send_to_url", "strict"],
-  [/(?:include|output|print|share)\s+(?:\w+\s+)*(?:conversation|chat\s+history|previous\s+messages|full\s+context|entire\s+context)/i, "context_exfil", "strict"],
+  [/(?:include|output|print|share)\s+(?:[\p{L}\p{N}_]+\s+)*(?:conversation|chat\s+history|previous\s+messages|full\s+context|entire\s+context)/iu, "context_exfil", "strict"],
 
   // Persistence / sensitive paths (strict) — adapted to this bot
   [/authorized_keys/i, "ssh_backdoor", "strict"],
   [/\$HOME\/\.ssh|~\/\.ssh/i, "ssh_access", "strict"],
   [/channels\/telegram\/\.env/i, "bot_env_access", "strict"],
-  [/access\.json/i, "bot_access_mod", "strict"],
+  [/(?:update|modify|edit|write|change|append|add\s+to)\s+.*access\.json/i, "bot_access_mod", "strict"],
   [/(?:update|modify|edit|write|change|append|add\s+to)\s+.*(?:AGENTS\.md|CLAUDE\.md|\.cursorrules|\.clinerules)/i, "agent_config_mod", "strict"],
 
   // Hardcoded secrets (strict)
@@ -110,6 +111,7 @@ export function scanThreats(content: string, scope: ThreatScope = "strict"): str
     }
   }
   const include = SCOPE_INCLUDES[scope];
+  if (!include) throw new Error(`scanThreats: unknown scope "${scope}"`);
   for (const [re, id, patScope] of PATTERNS) {
     if (include.has(patScope) && re.test(content)) findings.push(id);
   }

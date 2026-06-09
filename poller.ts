@@ -41,6 +41,7 @@ const ACCESS_FILE =
 
 const TG_LIMIT = 4096; // Telegram hard limit on message length
 const HISTORY_MAX = 20; // keep last 10 exchanges (user + assistant)
+const RECALL_K = Number(process.env.RECALL_K ?? 4); // max recalled past messages injected per turn
 const POLL_TIMEOUT = 30; // seconds Telegram holds a long-poll open
 const FLUSH_MS = 1500; // min gap between Telegram edits while streaming (rate-limit safe)
 const CAL_LEAD_MIN = Number(process.env.CAL_NUDGE_MINUTES ?? 15); // nudge this many minutes before an event
@@ -311,15 +312,6 @@ function loadAllowList(): Set<string> {
   return new Set(list.map((id) => String(id)));
 }
 
-function historyFile(chatId: number) {
-  return join(HISTORY_DIR, `${chatId}.json`);
-}
-function loadHistory(chatId: number): HistoryItem[] {
-  return readJson<HistoryItem[]>(historyFile(chatId), []);
-}
-function saveHistory(chatId: number, history: HistoryItem[]) {
-  writeFileSync(historyFile(chatId), JSON.stringify(history.slice(-HISTORY_MAX), null, 2));
-}
 
 function loadMemory(): string {
   try {
@@ -554,13 +546,25 @@ async function handleMessage(msg: TgMessage) {
   } catch {}
 
   try {
-    const history = loadHistory(chatId);
+    const db = getDb();
+    // Recent history + recall are computed from PRIOR messages (before we store
+    // the current one), so the new message is never duplicated or self-recalled.
+    const history = recentMessages(db, chatId, HISTORY_MAX);
+    const beforeId = history.length ? history[0].id : Number.MAX_SAFE_INTEGER;
+    let recall: RecallHit[] = [];
+    try {
+      recall = searchMessages(db, chatId, userMsg || historyNote, RECALL_K, beforeId);
+    } catch (e: any) {
+      console.error(`[ERR] recall: ${e?.message ?? e}`);
+    }
+
     const answer =
-      (await streamClaude(buildPrompt(history, name, messageForClaude), chatId, placeholderId, model)).trim() ||
+      (await streamClaude(buildPrompt(history, name, messageForClaude, recall), chatId, placeholderId, model)).trim() ||
       "(no output)";
 
-    history.push({ role: "user", content: historyNote }, { role: "assistant", content: answer });
-    saveHistory(chatId, history);
+    const now = Math.floor(Date.now() / 1000);
+    insertMessage(db, { chatId, role: "user", content: historyNote, ts: now, model });
+    insertMessage(db, { chatId, role: "assistant", content: answer, ts: now, model });
     console.log(`[DONE] replied to ${fromId}`);
   } catch (e: any) {
     console.error(`[ERR] handling message from ${fromId}: ${e?.message ?? e}`);

@@ -227,7 +227,6 @@ export function restoreMemory(db: Database, id: number, opts: { now: number; act
 
 /** Load-time scrub: a row whose content trips the scan renders as a placeholder. */
 export function scrubForContext(row: MemoryRow): string {
-  if (row.content.startsWith("[BLOCKED:")) return row.content;
   const threats = scanThreats(row.content, "strict");
   if (!threats.length) return row.content;
   return `[BLOCKED: entry contained threat pattern(s): ${threats.join(", ")} — id ${row.id}; view raw with mem.ts show ${row.id} --raw, delete with mem.ts remove]`;

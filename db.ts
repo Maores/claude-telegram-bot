@@ -54,6 +54,43 @@ export function initSchema(db: Database): void {
     END;
 
     CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+
+    CREATE TABLE IF NOT EXISTS memory (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind       TEXT    NOT NULL,
+      content    TEXT    NOT NULL,
+      provenance TEXT    NOT NULL,
+      status     TEXT    NOT NULL,
+      reason     TEXT,
+      created_ts INTEGER NOT NULL,
+      updated_ts INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_status ON memory(status, kind);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(content, tokenize = 'unicode61');
+
+    CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
+      INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
+      DELETE FROM memory_fts WHERE rowid = old.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory BEGIN
+      UPDATE memory_fts SET content = new.content WHERE rowid = old.id;
+    END;
+
+    CREATE TABLE IF NOT EXISTS journal (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts           INTEGER NOT NULL,
+      actor        TEXT    NOT NULL,
+      action       TEXT    NOT NULL,
+      target_table TEXT    NOT NULL,
+      target_id    INTEGER,
+      provenance   TEXT,
+      reason       TEXT,
+      before       TEXT,
+      after        TEXT
+    );
   `);
 }
 

@@ -162,3 +162,39 @@ test("importHistoryJson does NOT set the done-marker when the directory read fai
 
   db.close();
 });
+
+import { describe } from "bun:test";
+
+describe("phase 2 schema", () => {
+  test("memory, memory_fts and journal tables exist", () => {
+    const db = openDb(":memory:");
+    const names = db
+      .query("SELECT name FROM sqlite_master WHERE type IN ('table','virtual table') ORDER BY name")
+      .all()
+      .map((r: any) => r.name);
+    expect(names).toContain("memory");
+    expect(names).toContain("memory_fts");
+    expect(names).toContain("journal");
+  });
+
+  test("initSchema is idempotent with the new tables", () => {
+    const db = openDb(":memory:");
+    expect(() => initSchema(db)).not.toThrow();
+  });
+
+  test("memory_fts stays in sync via triggers", () => {
+    const db = openDb(":memory:");
+    db.query(
+      "INSERT INTO memory (kind, content, provenance, status, created_ts, updated_ts) VALUES ('user','likes ristretto','maor','active',1,1)",
+    ).run();
+    const hit = db
+      .query("SELECT rowid FROM memory_fts WHERE memory_fts MATCH 'ristretto'")
+      .get() as any;
+    expect(hit).not.toBeNull();
+    db.query("UPDATE memory SET content = 'likes espresso' WHERE id = ?").run(hit.rowid);
+    expect(db.query("SELECT rowid FROM memory_fts WHERE memory_fts MATCH 'ristretto'").get()).toBeNull();
+    expect(db.query("SELECT rowid FROM memory_fts WHERE memory_fts MATCH 'espresso'").get()).not.toBeNull();
+    db.query("DELETE FROM memory WHERE id = ?").run(hit.rowid);
+    expect(db.query("SELECT rowid FROM memory_fts WHERE memory_fts MATCH 'espresso'").get()).toBeNull();
+  });
+});

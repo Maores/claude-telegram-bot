@@ -153,6 +153,8 @@ export function replaceMemory(db: Database, a: ReplaceArgs): MemoryRow {
     throw new MemoryError(`entry too long (${content.length} > ${ENTRY_MAX} chars) — split or shorten it`);
   }
   const threats = scanThreats(content, "strict");
+  // Replace preserves target.status: a clean edit never promotes a quarantined
+  // row to active (that's promoteMemory's job, gated by the re-scan above).
   const status: MemStatus = threats.length ? "quarantined" : target.status;
   const reason = threats.length ? `threat scan: ${threats.join(", ")}` : target.reason;
   if (status === "active") {
@@ -183,4 +185,38 @@ export function removeMemory(db: Database, a: RemoveArgs): MemoryRow {
     before: target, after,
   });
   return after;
+}
+
+function transition(
+  db: Database, id: number, from: MemStatus, action: "promote" | "restore",
+  opts: { now: number; actor?: string },
+): MemoryRow {
+  const target = getMemory(db, id);
+  if (!target) throw new MemoryError(`no memory entry with id ${id}`);
+  if (target.status !== from) throw new MemoryError(`entry ${id} is not ${from} (it is ${target.status})`);
+  // Defense-in-depth: re-scan the ACTUAL content at activation time rather than
+  // trusting any stored reason string. Nothing reaches 'active' with content that
+  // trips the threat scan — covers promote and the remove→restore path alike.
+  const threats = scanThreats(target.content, "strict");
+  if (threats.length) {
+    throw new MemoryError(
+      `entry ${id} still trips the threat scan (${threats.join(", ")}) — fix or remove it instead of activating`,
+    );
+  }
+  checkBudget(db, target.kind, target.content.length);
+  db.query("UPDATE memory SET status = 'active', reason = NULL, updated_ts = ? WHERE id = ?").run(opts.now, id);
+  const after = getMemory(db, id)!;
+  journal(db, {
+    ts: opts.now, actor: opts.actor ?? "bot", action, targetTable: "memory",
+    targetId: id, provenance: target.provenance, before: target, after,
+  });
+  return after;
+}
+
+export function promoteMemory(db: Database, id: number, opts: { now: number; actor?: string }): MemoryRow {
+  return transition(db, id, "quarantined", "promote", opts);
+}
+
+export function restoreMemory(db: Database, id: number, opts: { now: number; actor?: string }): MemoryRow {
+  return transition(db, id, "archived", "restore", opts);
 }

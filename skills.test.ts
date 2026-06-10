@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "./db";
-import { createSkill, parseSkillMd, SkillError, type SkillRow } from "./skills";
+import { createSkill, parseSkillMd, SkillError, type SkillRow, viewSkill, searchSkills, listSkills } from "./skills";
 
 const NOW = 1_781_000_000;
 
@@ -172,6 +172,89 @@ describe("createSkill", () => {
       createdBy: "curator",
     });
     expect(getRow(db, "named-author").created_by).toBe("curator");
+    db.close();
+  });
+});
+
+describe("viewSkill", () => {
+  test("returns the body and bumps use_count + last_used_at (active only)", () => {
+    const db = freshDb();
+    const dir = tmp();
+    createSkill(db, dir, {
+      name: "edit-calendar-event",
+      description: "Use when Maor asks to move or edit a calendar event",
+      source: "maor",
+      body: GOOD_BODY,
+      now: NOW,
+    });
+    const v = viewSkill(db, dir, "edit-calendar-event", NOW + 5);
+    expect(v.body).toContain("Confirm the uid");
+    const row = getRow(db, "edit-calendar-event");
+    expect(row.use_count).toBe(1);
+    expect(row.last_used_at).toBe(NOW + 5);
+    viewSkill(db, dir, "edit-calendar-event", NOW + 9);
+    expect(getRow(db, "edit-calendar-event").use_count).toBe(2);
+    db.close();
+  });
+
+  test("refuses a quarantined skill and a missing skill", () => {
+    const db = freshDb();
+    const dir = tmp();
+    createSkill(db, dir, {
+      name: "pending-skill",
+      description: "Use when doing pending things",
+      source: "derived",
+      body: GOOD_BODY,
+      now: NOW,
+    });
+    expect(() => viewSkill(db, dir, "pending-skill", NOW)).toThrow(/not active|quarantined/i);
+    expect(() => viewSkill(db, dir, "no-such-skill", NOW)).toThrow(/no skill/i);
+    db.close();
+  });
+});
+
+describe("searchSkills and listSkills", () => {
+  function seed(db: ReturnType<typeof freshDb>, dir: string) {
+    createSkill(db, dir, { name: "book-flight", description: "Use when booking or changing a flight", tags: "travel", source: "maor", body: GOOD_BODY, now: NOW });
+    createSkill(db, dir, { name: "edit-calendar-event", description: "Use when editing a calendar event", tags: "calendar", source: "maor", body: GOOD_BODY, now: NOW });
+    createSkill(db, dir, { name: "summarize-thread", description: "Use when summarizing an email thread", tags: "email", source: "derived", body: GOOD_BODY, now: NOW }); // quarantined
+  }
+
+  test("search ranks active matches and never returns quarantined/archived", () => {
+    const db = freshDb();
+    const dir = tmp();
+    seed(db, dir);
+    const hits = searchSkills(db, "calendar event", 5);
+    expect(hits.map((h) => h.name)).toContain("edit-calendar-event");
+    expect(hits.every((h) => h.status === "active")).toBe(true);
+    // the derived (quarantined) skill is excluded even on a direct term match
+    expect(searchSkills(db, "email thread", 5).map((h) => h.name)).not.toContain("summarize-thread");
+    db.close();
+  });
+
+  test("search sanitizes FTS metacharacters instead of throwing", () => {
+    const db = freshDb();
+    const dir = tmp();
+    seed(db, dir);
+    expect(() => searchSkills(db, '"flight AND (', 5)).not.toThrow();
+    db.close();
+  });
+
+  test("search matches a Hebrew query token", () => {
+    const db = freshDb();
+    const dir = tmp();
+    createSkill(db, dir, { name: "order-coffee", description: "Use when Maor wants לקנות קפה", tags: "coffee", source: "maor", body: GOOD_BODY, now: NOW });
+    expect(searchSkills(db, "לקנות", 5).map((h) => h.name)).toContain("order-coffee");
+    db.close();
+  });
+
+  test("list returns all by default and filters by status", () => {
+    const db = freshDb();
+    const dir = tmp();
+    seed(db, dir);
+    expect(listSkills(db, {}).length).toBe(3);
+    expect(listSkills(db, { status: "active" }).length).toBe(2);
+    expect(listSkills(db, { status: "quarantined" }).length).toBe(1);
     db.close();
   });
 });

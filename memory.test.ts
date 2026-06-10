@@ -343,6 +343,15 @@ describe("importMemoryMd", () => {
     expect(importMemoryMd(db, "- late fact", NOW)).toBe(0); // marker already set
     db.close();
   });
+
+  test("skips markdown separators (--- / *** / ___), keeping real facts", () => {
+    const db = freshDb();
+    const md = ["# Memory", "", "- a real fact", "---", "***", "___", "- another fact"].join("\n");
+    expect(importMemoryMd(db, md, NOW)).toBe(2);
+    const rows = db.query("SELECT content FROM memory ORDER BY id").all() as { content: string }[];
+    expect(rows.map((r) => r.content)).toEqual(["a real fact", "another fact"]);
+    db.close();
+  });
 });
 
 describe("exportMirror", () => {

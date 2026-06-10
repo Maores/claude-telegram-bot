@@ -316,7 +316,8 @@ export function importMemoryMd(db: Database, md: string, now: number): number {
   const lines = md
     .split("\n")
     .map((l) => l.replace(/^\s*[-*]\s+/, "").trim())
-    .filter((l) => l && !l.startsWith("#"));
+    // skip blanks, headings, and horizontal-rule separators (--- / *** / ___)
+    .filter((l) => l && !l.startsWith("#") && !/^[-*_]{3,}$/.test(l));
   let imported = 0;
   const run = db.transaction(() => {
     for (const content of lines) {

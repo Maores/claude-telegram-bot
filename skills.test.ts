@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, readdirSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "./db";
-import { createSkill, parseSkillMd, SkillError, type SkillRow, viewSkill, searchSkills, listSkills, patchSkill, archiveSkill, restoreSkill, activateSkill, skillsIndexBlock } from "./skills";
+import { createSkill, parseSkillMd, rejectNonReusable, SkillError, type SkillRow, viewSkill, searchSkills, listSkills, patchSkill, archiveSkill, restoreSkill, activateSkill, skillsIndexBlock } from "./skills";
 
 const NOW = 1_781_000_000;
 
@@ -408,5 +408,19 @@ describe("skillsIndexBlock", () => {
     seed(db, dir);
     expect(skillsIndexBlock(db, "zzznotpresentquery", 5)).toBe("");
     db.close();
+  });
+});
+
+describe("rejectNonReusable — false-positive guard (final-review fix)", () => {
+  test("rejects genuine negative tool claims", () => {
+    expect(rejectNonReusable("The export API is broken; skip it.")).not.toBeNull();
+    expect(rejectNonReusable("This approach doesn't work on staging.")).not.toBeNull();
+    expect(rejectNonReusable("The old endpoint is unusable now.")).not.toBeNull();
+  });
+  test("allows legitimate procedures that mention working / usable / use", () => {
+    expect(rejectNonReusable("Check whether the printer is working before sending.")).toBeNull();
+    expect(rejectNonReusable("Never use the broken endpoint; call /v2 instead.")).toBeNull();
+    expect(rejectNonReusable("The endpoint is not working in staging; use prod instead.")).toBeNull();
+    expect(rejectNonReusable("Confirm it is usable, then proceed.")).toBeNull();
   });
 });

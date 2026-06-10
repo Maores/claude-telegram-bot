@@ -104,7 +104,7 @@ export function parseSkillMd(text: string): ParsedSkill {
 export function rejectNonReusable(body: string): string | null {
   const text = body.trim();
   // Negative tool/capability claim — "<thing> is/isn't broken/working/usable".
-  if (/\b(?:is|isn't|is not|not|never)\s+\w*\s*(?:broken|working|usable|use\b)/i.test(text)) {
+  if (/\b(?:does\s*not|doesn['']?t|do\s*not|don['']?t)\s+work\b|\bis\s+(?:broken|unusable|unreliable|deprecated|useless)\b/i.test(text)) {
     return "not reusable: reads as a negative tool claim (e.g. \"X is broken / doesn't work\") — these calcify into refusals; record it in memory instead";
   }
   // Pure task-narrative: opens with a first-person/temporal recount, no imperative procedure.

@@ -218,3 +218,81 @@ export function listSkills(db: Database, f: { status?: SkillStatus }): SkillRow[
     : "SELECT * FROM skills ORDER BY name";
   return (f.status ? db.query(sql).all(f.status) : db.query(sql).all()) as SkillRow[];
 }
+
+export interface PatchArgs { old: string; new: string; now: number }
+
+/**
+ * Substring-replace inside an active skill's body file. Exactly one occurrence
+ * must match (0 or ≥2 → SkillError, file untouched). Snapshots the pre-edit
+ * file to `<path>.bak.<now>` first, then writes, then bumps patch_count.
+ */
+export function patchSkill(db: Database, dir: string, name: string, a: PatchArgs): SkillRow {
+  const row = getSkill(db, name);
+  if (!row) throw new SkillError(`no skill named "${name}"`);
+  if (row.status !== "active") {
+    throw new SkillError(`skill "${name}" is not active (it is ${row.status}) — only active skills can be patched`);
+  }
+  const needle = a.old ?? "";
+  if (!needle) throw new SkillError("empty match text");
+  const current = readFileSync(row.path, "utf8");
+  const count = current.split(needle).length - 1;
+  if (count === 0) throw new SkillError(`no match for "${needle}" in skill "${name}"`);
+  if (count > 1) throw new SkillError(`${count} (multiple) matches for "${needle}" in skill "${name}" — be more specific`);
+  const updated = current.replace(needle, a.new);
+  // Snapshot first, then overwrite the body, then bump the counter.
+  copyFileSync(row.path, `${row.path}.bak.${a.now}`);
+  writeFileSync(row.path, updated);
+  db.query("UPDATE skills SET patch_count = patch_count + 1, updated_ts = ? WHERE id = ?").run(a.now, row.id);
+  return getSkill(db, name)!;
+}
+
+const ARCHIVE_SUBDIR = ".archive";
+
+function moveAndSetStatus(
+  db: Database, name: string, _fromStatus: SkillStatus, toStatus: SkillStatus,
+  fromPath: string, toPath: string, now: number,
+): SkillRow {
+  mkdirSync(join(toPath, ".."), { recursive: true });
+  // File first, then the row.
+  renameSync(fromPath, toPath);
+  db.query("UPDATE skills SET status = ?, path = ?, updated_ts = ? WHERE name = ?").run(toStatus, toPath, now, name);
+  return getSkill(db, name)!;
+}
+
+/** Soft-delete: active → archived, body moved to <dir>/.archive/<name>.md. */
+export function archiveSkill(db: Database, dir: string, name: string, now: number): SkillRow {
+  const row = getSkill(db, name);
+  if (!row) throw new SkillError(`no skill named "${name}"`);
+  if (row.status !== "active") throw new SkillError(`skill "${name}" is not active (it is ${row.status})`);
+  const dest = join(dir, ARCHIVE_SUBDIR, `${name}.md`);
+  return moveAndSetStatus(db, name, "active", "archived", row.path, dest, now);
+}
+
+/** Reverse an archive: archived → active, body moved back to <dir>/<name>.md. */
+export function restoreSkill(db: Database, dir: string, name: string, now: number): SkillRow {
+  const row = getSkill(db, name);
+  if (!row) throw new SkillError(`no skill named "${name}"`);
+  if (row.status !== "archived") throw new SkillError(`skill "${name}" is not archived (it is ${row.status})`);
+  const dest = join(dir, `${name}.md`);
+  return moveAndSetStatus(db, name, "archived", "active", row.path, dest, now);
+}
+
+/**
+ * Promote a quarantined skill to active. Defense-in-depth: re-scan the ACTUAL
+ * body on disk at activation (like promoteMemory) — a still-poisoned body stays
+ * blocked rather than trusting the create-time verdict.
+ */
+export function activateSkill(db: Database, dir: string, name: string, now: number): SkillRow {
+  const row = getSkill(db, name);
+  if (!row) throw new SkillError(`no skill named "${name}"`);
+  if (row.status !== "quarantined") throw new SkillError(`skill "${name}" is not quarantined (it is ${row.status})`);
+  const parsed = parseSkillMd(readFileSync(row.path, "utf8"));
+  const threats = scanThreats(`${parsed.name} ${parsed.description} ${parsed.body}`, "strict");
+  if (threats.length) {
+    throw new SkillError(
+      `skill "${name}" still trips the threat scan (${threats.join(", ")}) — fix or archive it instead of activating`,
+    );
+  }
+  db.query("UPDATE skills SET status = 'active', updated_ts = ? WHERE id = ?").run(now, row.id);
+  return getSkill(db, name)!;
+}

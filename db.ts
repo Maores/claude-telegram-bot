@@ -91,6 +91,38 @@ export function initSchema(db: Database): void {
       before       TEXT,
       after        TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS skills (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      name         TEXT    NOT NULL UNIQUE,
+      description  TEXT    NOT NULL,
+      tags         TEXT    NOT NULL DEFAULT '',
+      path         TEXT    NOT NULL,
+      provenance   TEXT    NOT NULL,
+      status       TEXT    NOT NULL,
+      use_count    INTEGER NOT NULL DEFAULT 0,
+      last_used_at INTEGER,
+      patch_count  INTEGER NOT NULL DEFAULT 0,
+      pinned       INTEGER NOT NULL DEFAULT 0,
+      created_by   TEXT    NOT NULL,
+      created_ts   INTEGER NOT NULL,
+      updated_ts   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_skills_status ON skills(status);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
+      name, description, tags,
+      content = 'skills', content_rowid = 'id', tokenize = 'unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS skills_ai AFTER INSERT ON skills BEGIN
+      INSERT INTO skills_fts(rowid, name, description, tags)
+        VALUES (new.id, new.name, new.description, new.tags);
+    END;
+    CREATE TRIGGER IF NOT EXISTS skills_ad AFTER DELETE ON skills BEGIN
+      INSERT INTO skills_fts(skills_fts, rowid, name, description, tags)
+        VALUES ('delete', old.id, old.name, old.description, old.tags);
+    END;
   `);
 }
 

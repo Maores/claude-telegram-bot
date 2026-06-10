@@ -163,6 +163,58 @@ test("importHistoryJson does NOT set the done-marker when the directory read fai
   db.close();
 });
 
+describe("phase 3 skills schema", () => {
+  test("skills and skills_fts tables exist", () => {
+    const db = openDb(":memory:");
+    const names = db
+      .query("SELECT name FROM sqlite_master WHERE type IN ('table','virtual table') ORDER BY name")
+      .all()
+      .map((r: any) => r.name);
+    expect(names).toContain("skills");
+    expect(names).toContain("skills_fts");
+    db.close();
+  });
+
+  test("initSchema is idempotent with the skills tables", () => {
+    const db = openDb(":memory:");
+    expect(() => initSchema(db)).not.toThrow();
+    db.close();
+  });
+
+  test("skills_fts indexes name/description/tags on insert and purges on delete", () => {
+    const db = openDb(":memory:");
+    db.query(
+      `INSERT INTO skills (name, description, tags, path, provenance, status, created_by, created_ts, updated_ts)
+       VALUES ('book-flight','Use when booking a flight','travel,air','skills/book-flight.md','maor','active','maor',1,1)`,
+    ).run();
+    const hit = db.query("SELECT rowid FROM skills_fts WHERE skills_fts MATCH 'flight'").get() as any;
+    expect(hit).not.toBeNull();
+    expect(db.query("SELECT rowid FROM skills_fts WHERE skills_fts MATCH 'travel'").get()).not.toBeNull();
+    db.query("DELETE FROM skills WHERE id = ?").run(hit.rowid);
+    expect(db.query("SELECT rowid FROM skills_fts WHERE skills_fts MATCH 'flight'").get()).toBeNull();
+    db.close();
+  });
+
+  test("a status-only UPDATE leaves the FTS index intact (indexed cols never change)", () => {
+    const db = openDb(":memory:");
+    db.query(
+      `INSERT INTO skills (name, description, tags, path, provenance, status, created_by, created_ts, updated_ts)
+       VALUES ('edit-cal','Use when editing a calendar event','calendar','skills/edit-cal.md','maor','active','maor',1,1)`,
+    ).run();
+    db.query("UPDATE skills SET status = 'archived', use_count = use_count + 1, updated_ts = 2 WHERE name = 'edit-cal'").run();
+    expect(db.query("SELECT rowid FROM skills_fts WHERE skills_fts MATCH 'calendar'").get()).not.toBeNull();
+    const activeHit = db
+      .query("SELECT s.id FROM skills_fts JOIN skills s ON s.id = skills_fts.rowid WHERE skills_fts MATCH 'calendar' AND s.status = 'active'")
+      .get();
+    expect(activeHit).toBeNull();
+    db.query("UPDATE skills SET status = 'active', updated_ts = 3 WHERE name = 'edit-cal'").run();
+    expect(
+      db.query("SELECT s.id FROM skills_fts JOIN skills s ON s.id = skills_fts.rowid WHERE skills_fts MATCH 'calendar' AND s.status = 'active'").get(),
+    ).not.toBeNull();
+    db.close();
+  });
+});
+
 describe("phase 2 schema", () => {
   test("memory, memory_fts and journal tables exist", () => {
     const db = openDb(":memory:");

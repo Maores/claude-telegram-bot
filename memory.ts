@@ -122,15 +122,19 @@ export function addMemory(db: Database, a: AddArgs): AddResult {
   if (status === "active") checkBudget(db, a.kind, content.length);
 
   const actor = a.actor ?? "bot";
-  const id = Number(
-    db.query(
-      "INSERT INTO memory (kind, content, provenance, status, reason, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run(a.kind, content, a.source, status, reason, a.now, a.now).lastInsertRowid,
-  );
-  journal(db, {
-    ts: a.now, actor, action: "add", targetTable: "memory", targetId: id,
-    provenance: a.source, reason, before: null, after: getMemory(db, id),
-  });
+  let id!: number;
+  // Write + audit journal must commit together or not at all.
+  db.transaction(() => {
+    id = Number(
+      db.query(
+        "INSERT INTO memory (kind, content, provenance, status, reason, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(a.kind, content, a.source, status, reason, a.now, a.now).lastInsertRowid,
+    );
+    journal(db, {
+      ts: a.now, actor, action: "add", targetTable: "memory", targetId: id,
+      provenance: a.source, reason, before: null, after: getMemory(db, id),
+    });
+  })();
   return { id, status, reason };
 }
 
@@ -164,14 +168,18 @@ export function replaceMemory(db: Database, a: ReplaceArgs): MemoryRow {
   if (status === "active") {
     checkBudget(db, target.kind, content.length - target.content.length);
   }
-  db.query("UPDATE memory SET content = ?, status = ?, reason = ?, updated_ts = ? WHERE id = ?").run(
-    content, status, reason, a.now, target.id,
-  );
-  const after = getMemory(db, target.id)!;
-  journal(db, {
-    ts: a.now, actor: a.actor ?? "bot", action: "replace", targetTable: "memory",
-    targetId: target.id, provenance: target.provenance, reason, before: target, after,
-  });
+  let after!: MemoryRow;
+  // Write + audit journal must commit together or not at all.
+  db.transaction(() => {
+    db.query("UPDATE memory SET content = ?, status = ?, reason = ?, updated_ts = ? WHERE id = ?").run(
+      content, status, reason, a.now, target.id,
+    );
+    after = getMemory(db, target.id)!;
+    journal(db, {
+      ts: a.now, actor: a.actor ?? "bot", action: "replace", targetTable: "memory",
+      targetId: target.id, provenance: target.provenance, reason, before: target, after,
+    });
+  })();
   return after;
 }
 
@@ -179,15 +187,19 @@ export interface RemoveArgs { old: string; reason?: string; now: number; actor?:
 
 export function removeMemory(db: Database, a: RemoveArgs): MemoryRow {
   const target = resolveBySubstring(db, a.old);
-  db.query("UPDATE memory SET status = 'archived', reason = ?, updated_ts = ? WHERE id = ?").run(
-    a.reason ?? target.reason, a.now, target.id,
-  );
-  const after = getMemory(db, target.id)!;
-  journal(db, {
-    ts: a.now, actor: a.actor ?? "bot", action: "remove", targetTable: "memory",
-    targetId: target.id, provenance: target.provenance, reason: a.reason ?? null,
-    before: target, after,
-  });
+  let after!: MemoryRow;
+  // Write + audit journal must commit together or not at all.
+  db.transaction(() => {
+    db.query("UPDATE memory SET status = 'archived', reason = ?, updated_ts = ? WHERE id = ?").run(
+      a.reason ?? target.reason, a.now, target.id,
+    );
+    after = getMemory(db, target.id)!;
+    journal(db, {
+      ts: a.now, actor: a.actor ?? "bot", action: "remove", targetTable: "memory",
+      targetId: target.id, provenance: target.provenance, reason: a.reason ?? null,
+      before: target, after,
+    });
+  })();
   return after;
 }
 
@@ -208,12 +220,16 @@ function transition(
     );
   }
   checkBudget(db, target.kind, target.content.length);
-  db.query("UPDATE memory SET status = 'active', reason = NULL, updated_ts = ? WHERE id = ?").run(opts.now, id);
-  const after = getMemory(db, id)!;
-  journal(db, {
-    ts: opts.now, actor: opts.actor ?? "bot", action, targetTable: "memory",
-    targetId: id, provenance: target.provenance, before: target, after,
-  });
+  let after!: MemoryRow;
+  // Write + audit journal must commit together or not at all.
+  db.transaction(() => {
+    db.query("UPDATE memory SET status = 'active', reason = NULL, updated_ts = ? WHERE id = ?").run(opts.now, id);
+    after = getMemory(db, id)!;
+    journal(db, {
+      ts: opts.now, actor: opts.actor ?? "bot", action, targetTable: "memory",
+      targetId: id, provenance: target.provenance, before: target, after,
+    });
+  })();
   return after;
 }
 

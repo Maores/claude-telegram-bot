@@ -402,3 +402,27 @@ describe("exportMirror", () => {
     db.close();
   });
 });
+
+describe("atomic write + journal", () => {
+  // Each mutator's table write and its journal() audit insert must commit
+  // together or not at all. We force the journal insert to fail (drop the
+  // journal table) and assert the memory change rolled back.
+  test("add: a journal failure rolls back the memory insert", () => {
+    const db = freshDb();
+    addMemory(db, { kind: "user", content: "first", source: "maor", now: NOW });
+    db.query("DROP TABLE journal").run();
+    expect(() => addMemory(db, { kind: "user", content: "second", source: "maor", now: NOW })).toThrow();
+    expect(db.query("SELECT COUNT(1) c FROM memory").get()).toEqual({ c: 1 }); // 'second' rolled back
+    db.close();
+  });
+
+  test("remove: a journal failure rolls back the archive (UPDATE atomic)", () => {
+    const db = freshDb();
+    const r = addMemory(db, { kind: "user", content: "keep me", source: "maor", now: NOW });
+    db.query("DROP TABLE journal").run();
+    expect(() => removeMemory(db, { old: "keep me", now: NOW })).toThrow();
+    const row = db.query("SELECT status FROM memory WHERE id = ?").get(r.id) as { status: string };
+    expect(row.status).toBe("active"); // not archived — rolled back
+    db.close();
+  });
+});

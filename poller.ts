@@ -21,6 +21,7 @@ import { StreamParser, displayText } from "./stream.ts";
 import { pickModel } from "./model.ts";
 import { upcomingEvents, nudgeKey, loadNotified, saveNotified, pruneNotified } from "./calendar.ts";
 import { getDb, insertMessage, recentMessages, searchMessages, renderRecall, importHistoryJson, type RecallHit } from "./db";
+import { coreMemoryBlock, importMemoryMd } from "./memory";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -312,7 +313,18 @@ function loadAllowList(): Set<string> {
   return new Set(list.map((id) => String(id)));
 }
 
+/**
+ * Long-term memory for the prompt. Cutover (safe switch + backup): prefer the
+ * DB-backed active core memory; fall back to the legacy flat MEMORY.md file if
+ * the core is empty or the DB read errors, so the bot can never end up blank.
+ */
 function loadMemory(): string {
+  try {
+    const block = coreMemoryBlock(getDb());
+    if (block) return block;
+  } catch (e: any) {
+    console.error(`[ERR] memory load (db): ${e?.message ?? e}`);
+  }
   try {
     return readFileSync(MEMORY_FILE, "utf8").trim();
   } catch {
@@ -325,9 +337,9 @@ export function buildPrompt(
   name: string,
   text: string,
   recall: RecallHit[] = [],
+  memory = "",
 ): string {
   const lines: string[] = [];
-  const memory = loadMemory();
   if (memory) {
     lines.push("What you know about the user (long-term memory):");
     lines.push(memory, "");
@@ -558,7 +570,7 @@ async function handleMessage(msg: TgMessage) {
     }
 
     const answer =
-      (await streamClaude(buildPrompt(history, name, messageForClaude, recall), chatId, placeholderId, model)).trim() ||
+      (await streamClaude(buildPrompt(history, name, messageForClaude, recall, loadMemory()), chatId, placeholderId, model)).trim() ||
       "(no output)";
 
     const now = Math.floor(Date.now() / 1000);
@@ -679,6 +691,14 @@ async function main() {
     if (imported) console.log(`[DB] imported ${imported} legacy history messages`);
   } catch (e: any) {
     console.error(`[ERR] history import: ${e?.message ?? e}`);
+  }
+  try {
+    let md = "";
+    try { md = readFileSync(MEMORY_FILE, "utf8"); } catch {}
+    const importedMem = importMemoryMd(getDb(), md, Math.floor(Date.now() / 1000));
+    if (importedMem) console.log(`[DB] imported ${importedMem} memory entries from MEMORY.md`);
+  } catch (e: any) {
+    console.error(`[ERR] memory import: ${e?.message ?? e}`);
   }
   sweepUploads();
 

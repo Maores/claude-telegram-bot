@@ -195,3 +195,16 @@ test("buildPrompt omits the memory block when memory is empty", () => {
   const p = buildPrompt([], "Maor", "hi", [], "");
   expect(p).not.toContain("long-term memory");
 });
+
+// --- buildPrompt skills block (phase 3 cutover) --------------------------------
+
+test("buildPrompt injects the available-skills block when skills is passed", () => {
+  const p = buildPrompt([], "Maor", "hi", [], "", "<available-skills>\n- book-flight — Use when booking a flight\n</available-skills>");
+  expect(p).toContain("<available-skills>");
+  expect(p).toContain("book-flight");
+});
+
+test("buildPrompt omits the skills block when skills is empty", () => {
+  const p = buildPrompt([], "Maor", "hi", [], "", "");
+  expect(p).not.toContain("<available-skills>");
+});

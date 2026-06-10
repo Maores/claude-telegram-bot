@@ -22,6 +22,7 @@ import { pickModel } from "./model.ts";
 import { upcomingEvents, nudgeKey, loadNotified, saveNotified, pruneNotified } from "./calendar.ts";
 import { getDb, insertMessage, recentMessages, searchMessages, renderRecall, importHistoryJson, type RecallHit } from "./db";
 import { coreMemoryBlock, importMemoryMd } from "./memory";
+import { skillsIndexBlock } from "./skills";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -338,6 +339,7 @@ export function buildPrompt(
   text: string,
   recall: RecallHit[] = [],
   memory = "",
+  skills = "",
 ): string {
   const lines: string[] = [];
   if (memory) {
@@ -347,6 +349,9 @@ export function buildPrompt(
   const recallLines = renderRecall(recall, name);
   if (recallLines.length) {
     lines.push(...recallLines, "");
+  }
+  if (skills) {
+    lines.push(skills, "");
   }
   if (history.length) {
     lines.push("Recent conversation (for context):");
@@ -568,9 +573,15 @@ async function handleMessage(msg: TgMessage) {
     } catch (e: any) {
       console.error(`[ERR] recall: ${e?.message ?? e}`);
     }
+    let skills = "";
+    try {
+      skills = skillsIndexBlock(db, userMsg || historyNote);
+    } catch (e: any) {
+      console.error(`[ERR] skills: ${e?.message ?? e}`);
+    }
 
     const answer =
-      (await streamClaude(buildPrompt(history, name, messageForClaude, recall, loadMemory()), chatId, placeholderId, model)).trim() ||
+      (await streamClaude(buildPrompt(history, name, messageForClaude, recall, loadMemory(), skills), chatId, placeholderId, model)).trim() ||
       "(no output)";
 
     const now = Math.floor(Date.now() / 1000);

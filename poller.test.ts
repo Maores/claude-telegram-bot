@@ -182,3 +182,16 @@ test("buildPrompt omits the recall block when there is no recall", () => {
   const prompt = buildPrompt([], "Maor", "hello", []);
   expect(prompt).not.toContain("<recalled-context>");
 });
+
+// --- buildPrompt long-term memory block (cutover) -----------------------------
+
+test("buildPrompt injects the long-term memory block when memory is passed", () => {
+  const p = buildPrompt([], "Maor", "hi", [], "- Maor studies at Braude");
+  expect(p).toContain("What you know about the user (long-term memory):");
+  expect(p).toContain("Maor studies at Braude");
+});
+
+test("buildPrompt omits the memory block when memory is empty", () => {
+  const p = buildPrompt([], "Maor", "hi", [], "");
+  expect(p).not.toContain("long-term memory");
+});

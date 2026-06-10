@@ -286,6 +286,25 @@ export function showMemory(db: Database, id: number, opts: { raw: boolean }): Me
 }
 
 /**
+ * Render the active core memory (both kinds, scrubbed) as the long-term-memory
+ * block the poller injects into the prompt. Returns "" when there is no active
+ * core, so the caller can fall back to the legacy MEMORY.md file.
+ */
+export function coreMemoryBlock(db: Database): string {
+  const user = listMemory(db, { kind: "user", status: "active" });
+  const agent = listMemory(db, { kind: "agent", status: "active" });
+  if (!user.length && !agent.length) return "";
+  const lines: string[] = [];
+  for (const r of user) lines.push(`- ${r.content}`);
+  if (agent.length) {
+    if (user.length) lines.push("");
+    lines.push("Your own operational notes:");
+    for (const r of agent) lines.push(`- ${r.content}`);
+  }
+  return lines.join("\n");
+}
+
+/**
  * One-time import of the flat MEMORY.md into user-core rows. Takes the file
  * CONTENT (caller reads the file) so tests stay filesystem-free. Marker-guarded
  * via meta key 'memory_md_imported'. Budget- and cap-exempt: it must mirror

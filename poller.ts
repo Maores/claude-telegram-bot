@@ -644,7 +644,21 @@ async function checkReminders() {
   }
   for (const r of due) {
     try {
-      await tg("sendMessage", { chat_id: r.chatId, text: `⏰ Reminder: ${r.text}` });
+      if (r.text.startsWith("[AUTO] ")) {
+        // "[AUTO] <prompt>" reminders run the prompt through Claude instead of pinging the text.
+        const autoPrompt = r.text.slice("[AUTO] ".length);
+        const ph = await tg("sendMessage", { chat_id: r.chatId, text: "⏳" });
+        let skills = "";
+        try {
+          skills = skillsIndexBlock(getDb(), autoPrompt);
+        } catch (e: any) {
+          console.error(`[ERR] skills: ${e?.message ?? e}`);
+        }
+        const fullPrompt = buildPrompt([], "Maor", autoPrompt, [], loadMemory(), skills);
+        await streamClaude(fullPrompt, r.chatId, ph.message_id, "sonnet");
+      } else {
+        await tg("sendMessage", { chat_id: r.chatId, text: `⏰ Reminder: ${r.text}` });
+      }
       console.log(`[REMIND] fired ${r.id} -> ${r.chatId}: ${r.text}`);
     } catch (e: any) {
       console.error(`[ERR] send reminder ${r.id}: ${e?.message ?? e}`);

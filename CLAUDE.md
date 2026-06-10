@@ -50,6 +50,11 @@ these from your current directory.
   where <days> is a CSV of weekday numbers 0=Sun..6=Sat. daily = `0,1,2,3,4,5,6`;
   weekdays = `1,2,3,4,5`; a single number for weekly (e.g. `1` = every Monday).
 - List: `bun run remind.ts list "$TELEGRAM_CHAT_ID"`. Cancel: `bun run remind.ts cancel "$TELEGRAM_CHAT_ID" <id>`.
+- Auto-action: a reminder whose text starts with `[AUTO] ` is not sent as a plain
+  ping — at fire time the text after the prefix runs as a prompt through a fresh
+  Claude session (with memory and skills context) and the answer is sent to the
+  chat. Use this for scheduled jobs like the nightly daily-summary. This already
+  works — do NOT edit poller.ts to build it again.
 - After scheduling, confirm to Maor in plain language what and when (e.g. "I'll
   remind you tomorrow at 09:00 to call the bank").
 

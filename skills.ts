@@ -171,3 +171,50 @@ export function createSkill(db: Database, dir: string, a: CreateArgs): CreateRes
   );
   return { id, status, reason };
 }
+
+export interface ViewResult { row: SkillRow; body: string }
+
+/**
+ * Read an ACTIVE skill's body from disk and bump use_count + last_used_at.
+ * Quarantined/archived/missing skills throw — an unconfirmed body can never be
+ * pulled into context via view.
+ */
+export function viewSkill(db: Database, dir: string, name: string, now: number): ViewResult {
+  const row = getSkill(db, name);
+  if (!row) throw new SkillError(`no skill named "${name}"`);
+  if (row.status !== "active") {
+    throw new SkillError(`skill "${name}" is not active (it is ${row.status}) — activate it first`);
+  }
+  let body: string;
+  try {
+    body = parseSkillMd(readFileSync(row.path, "utf8")).body;
+  } catch {
+    throw new SkillError(`skill "${name}" body is missing or unreadable at ${row.path}`);
+  }
+  db.query("UPDATE skills SET use_count = use_count + 1, last_used_at = ? WHERE id = ?").run(now, row.id);
+  return { row: getSkill(db, name)!, body };
+}
+
+/** FTS5/BM25 over ACTIVE skills only (reuses sanitizeFtsQuery). [] on empty/hostile query. */
+export function searchSkills(db: Database, query: string, k: number): SkillRow[] {
+  const match = sanitizeFtsQuery(query);
+  if (!match) return [];
+  try {
+    return db
+      .query(
+        `SELECT s.* FROM skills_fts JOIN skills s ON s.id = skills_fts.rowid
+          WHERE skills_fts MATCH ? AND s.status = 'active'
+          ORDER BY rank LIMIT ?`,
+      )
+      .all(match, k) as SkillRow[];
+  } catch {
+    return [];
+  }
+}
+
+export function listSkills(db: Database, f: { status?: SkillStatus }): SkillRow[] {
+  const sql = f.status
+    ? "SELECT * FROM skills WHERE status = ? ORDER BY name"
+    : "SELECT * FROM skills ORDER BY name";
+  return (f.status ? db.query(sql).all(f.status) : db.query(sql).all()) as SkillRow[];
+}

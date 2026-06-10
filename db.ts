@@ -124,6 +124,13 @@ export function initSchema(db: Database): void {
         VALUES ('delete', old.id, old.name, old.description, old.tags);
     END;
   `);
+
+  // Phase 3.1 additive migration: which umbrella skill absorbed this one.
+  // ALTER guarded by PRAGMA so existing DBs (the live droplet) migrate in place.
+  const skillCols = db.query("PRAGMA table_info(skills)").all() as { name: string }[];
+  if (!skillCols.some((c) => c.name === "absorbed_into")) {
+    db.exec("ALTER TABLE skills ADD COLUMN absorbed_into TEXT");
+  }
 }
 
 /** Open (and migrate) the DB at `path`. Tests pass ":memory:". */

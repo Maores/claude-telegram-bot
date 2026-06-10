@@ -4,14 +4,15 @@
  *   bun run skill.ts create   --name <slug> --desc "Use when …" --source maor|derived [--tags "a,b"] (--body "…" | --body-file <path>)
  *   bun run skill.ts view     <name>
  *   bun run skill.ts search   <query...>
- *   bun run skill.ts list     [--status active|quarantined|archived]
+ *   bun run skill.ts list     [--status active|stale|quarantined|archived]
  *   bun run skill.ts patch    --name <slug> --old "<unique substring>" --new "<text>"
  *   bun run skill.ts archive  <name>
  *   bun run skill.ts restore  <name>
  *   bun run skill.ts activate <name>
- *
- * Landing dark: nothing here is read by the poller yet — skillsIndexBlock is
- * built + tested but not injected until the deferred cutover.
+ *   bun run skill.ts pin      <name>          (exempt from the weekly auto-lifecycle; unpin reverses)
+ *   bun run skill.ts unpin    <name>
+ *   bun run skill.ts curate                   (lifecycle pass: 30d idle → stale, 90d idle → archived)
+ *   bun run skill.ts absorb   <narrow> --into <umbrella>   (dedup: archive narrow, record absorbed_into)
  */
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -19,6 +20,7 @@ import { getDb } from "./db";
 import {
   createSkill, viewSkill, searchSkills, listSkills, patchSkill,
   archiveSkill, restoreSkill, activateSkill, SkillError,
+  pinSkill, absorbSkill, curateSkills, STALE_AFTER_DAYS, ARCHIVE_AFTER_DAYS,
   type SkillStatus, type SkillRow,
 } from "./skills";
 import type { Provenance } from "./memory";
@@ -52,7 +54,7 @@ function fmt(r: SkillRow): string {
 
 function main() {
   const [cmd, ...rest] = process.argv.slice(2);
-  if (!cmd) die("usage: skill.ts <create|view|search|list|patch|archive|restore|activate> ...");
+  if (!cmd) die("usage: skill.ts <create|view|search|list|patch|archive|restore|activate|pin|unpin|curate|absorb> ...");
 
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
@@ -124,6 +126,33 @@ function main() {
         if (!name) die("usage: activate <name>");
         const r = activateSkill(db, SKILLS_DIR, name, now);
         console.log(`OK — now active: ${fmt(r)}`);
+        break;
+      }
+      case "pin":
+      case "unpin": {
+        const name = f._[0];
+        if (!name) die(`usage: ${cmd} <name>`);
+        const r = pinSkill(db, name, cmd === "pin", now);
+        console.log(`OK — ${r.name} is now ${r.pinned ? "pinned (exempt from auto-cleanup)" : "unpinned"}`);
+        break;
+      }
+      case "curate": {
+        const rep = curateSkills(db, SKILLS_DIR, now);
+        const show = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
+        console.log(`staled (>${STALE_AFTER_DAYS}d unused): ${show(rep.staled)}`);
+        console.log(`archived (>${ARCHIVE_AFTER_DAYS}d unused): ${show(rep.archived)}`);
+        console.log(`pinned exempt: ${show(rep.pinnedExempt)}`);
+        console.log(
+          `counts: active ${rep.counts.active}, stale ${rep.counts.stale}, quarantined ${rep.counts.quarantined}, archived ${rep.counts.archived}`,
+        );
+        break;
+      }
+      case "absorb": {
+        const narrow = f._[0];
+        const into = typeof f.into === "string" ? f.into : "";
+        if (!narrow || !into) die("usage: absorb <narrow-name> --into <umbrella-name>");
+        const r = absorbSkill(db, SKILLS_DIR, narrow, into, now);
+        console.log(`OK — ${r.name} absorbed into ${r.absorbed_into} (archived; restore with: skill.ts restore ${r.name})`);
         break;
       }
       default:

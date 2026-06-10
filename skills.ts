@@ -296,3 +296,23 @@ export function activateSkill(db: Database, dir: string, name: string, now: numb
   db.query("UPDATE skills SET status = 'active', updated_ts = ? WHERE id = ?").run(now, row.id);
   return getSkill(db, name)!;
 }
+
+export const SKILLS_TOP_N = Number(process.env.SKILLS_TOP_N ?? 5);
+
+/**
+ * Render the FTS-ranked top-N ACTIVE skills as a fenced <available-skills>
+ * block of `- name — description` lines. Returns "" when nothing matches.
+ * Built and unit-tested now; the poller injection is wired at the cutover
+ * (this phase lands dark — nothing calls this yet).
+ */
+export function skillsIndexBlock(db: Database, query: string, n: number = SKILLS_TOP_N): string {
+  const hits = searchSkills(db, query, n);
+  if (hits.length === 0) return "";
+  const lines = [
+    "<available-skills>",
+    "Skills you have written for yourself. View a skill's full steps with: skill.ts view <name>",
+  ];
+  for (const h of hits) lines.push(`- ${h.name} — ${h.description}`);
+  lines.push("</available-skills>");
+  return lines.join("\n");
+}

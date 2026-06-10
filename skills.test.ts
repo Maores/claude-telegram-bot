@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, readdirSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "./db";
-import { createSkill, parseSkillMd, SkillError, type SkillRow, viewSkill, searchSkills, listSkills, patchSkill, archiveSkill, restoreSkill, activateSkill } from "./skills";
+import { createSkill, parseSkillMd, SkillError, type SkillRow, viewSkill, searchSkills, listSkills, patchSkill, archiveSkill, restoreSkill, activateSkill, skillsIndexBlock } from "./skills";
 
 const NOW = 1_781_000_000;
 
@@ -360,6 +360,53 @@ describe("activateSkill", () => {
     const dir = tmp();
     createSkill(db, dir, { name: "already-active", description: "Use when active", source: "maor", body: GOOD_BODY, now: NOW });
     expect(() => activateSkill(db, dir, "already-active", NOW)).toThrow(/not quarantined/i);
+    db.close();
+  });
+});
+
+describe("skillsIndexBlock", () => {
+  function seed(db: ReturnType<typeof freshDb>, dir: string) {
+    createSkill(db, dir, { name: "book-flight", description: "Use when booking or changing a flight", tags: "travel", source: "maor", body: GOOD_BODY, now: NOW });
+    createSkill(db, dir, { name: "edit-calendar-event", description: "Use when editing a calendar event", tags: "calendar", source: "maor", body: GOOD_BODY, now: NOW });
+    createSkill(db, dir, { name: "summarize-thread", description: "Use when summarizing an email thread", tags: "email", source: "derived", body: GOOD_BODY, now: NOW }); // quarantined
+  }
+
+  test("renders a fenced block of active name — description lines, ranked", () => {
+    const db = freshDb();
+    const dir = tmp();
+    seed(db, dir);
+    const block = skillsIndexBlock(db, "calendar event", 5);
+    expect(block).toContain("<available-skills>");
+    expect(block).toContain("</available-skills>");
+    expect(block).toContain("skill.ts view");
+    expect(block).toContain("- edit-calendar-event — Use when editing a calendar event");
+    db.close();
+  });
+
+  test("excludes quarantined skills", () => {
+    const db = freshDb();
+    const dir = tmp();
+    seed(db, dir);
+    expect(skillsIndexBlock(db, "email thread", 5)).not.toContain("summarize-thread");
+    db.close();
+  });
+
+  test("honours the top-N cap", () => {
+    const db = freshDb();
+    const dir = tmp();
+    for (let i = 0; i < 6; i++) {
+      createSkill(db, dir, { name: `skill-${i}`, description: `Use when handling case ${i} flight`, source: "maor", body: GOOD_BODY, now: NOW });
+    }
+    const block = skillsIndexBlock(db, "flight", 3);
+    expect(block.split("\n").filter((l) => l.startsWith("- ")).length).toBe(3);
+    db.close();
+  });
+
+  test("returns empty string when nothing matches", () => {
+    const db = freshDb();
+    const dir = tmp();
+    seed(db, dir);
+    expect(skillsIndexBlock(db, "zzznotpresentquery", 5)).toBe("");
     db.close();
   });
 });

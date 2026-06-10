@@ -26,7 +26,7 @@ import { sanitizeFtsQuery } from "./db";
 import { scanThreats } from "./threats";
 import type { Provenance } from "./memory";
 
-export type SkillStatus = "active" | "quarantined" | "archived";
+export type SkillStatus = "active" | "stale" | "quarantined" | "archived";
 
 export interface SkillRow {
   id: number;
@@ -43,6 +43,7 @@ export interface SkillRow {
   created_by: string;
   created_ts: number;
   updated_ts: number;
+  absorbed_into: string | null;
 }
 
 export class SkillError extends Error {}
@@ -145,7 +146,7 @@ export function createSkill(db: Database, dir: string, a: CreateArgs): CreateRes
   const nonReusable = rejectNonReusable(parsed.body);
   if (nonReusable) throw new SkillError(nonReusable);
 
-  const threats = scanThreats(`${parsed.name} ${parsed.description} ${parsed.body}`, "strict");
+  const threats = scanThreats(`${parsed.name} ${parsed.description} ${tags} ${parsed.body}`, "strict");
   let status: "active" | "quarantined";
   let reason: string | null = null;
   if (threats.length) {
@@ -175,14 +176,15 @@ export function createSkill(db: Database, dir: string, a: CreateArgs): CreateRes
 export interface ViewResult { row: SkillRow; body: string }
 
 /**
- * Read an ACTIVE skill's body from disk and bump use_count + last_used_at.
- * Quarantined/archived/missing skills throw — an unconfirmed body can never be
- * pulled into context via view.
+ * Read an ACTIVE or STALE skill's body from disk and bump use_count +
+ * last_used_at. Viewing a stale skill revives it (use = proof of life, so the
+ * weekly curator's idle clock restarts). Quarantined/archived/missing skills
+ * throw — an unconfirmed body can never be pulled into context via view.
  */
 export function viewSkill(db: Database, dir: string, name: string, now: number): ViewResult {
   const row = getSkill(db, name);
   if (!row) throw new SkillError(`no skill named "${name}"`);
-  if (row.status !== "active") {
+  if (row.status !== "active" && row.status !== "stale") {
     throw new SkillError(`skill "${name}" is not active (it is ${row.status}) — activate it first`);
   }
   let body: string;
@@ -191,11 +193,15 @@ export function viewSkill(db: Database, dir: string, name: string, now: number):
   } catch {
     throw new SkillError(`skill "${name}" body is missing or unreadable at ${row.path}`);
   }
-  db.query("UPDATE skills SET use_count = use_count + 1, last_used_at = ? WHERE id = ?").run(now, row.id);
+  db.query("UPDATE skills SET use_count = use_count + 1, last_used_at = ?, status = 'active' WHERE id = ?").run(now, row.id);
   return { row: getSkill(db, name)!, body };
 }
 
-/** FTS5/BM25 over ACTIVE skills only (reuses sanitizeFtsQuery). [] on empty/hostile query. */
+/**
+ * FTS5/BM25 over ACTIVE + STALE skills (reuses sanitizeFtsQuery). Stale skills
+ * stay discoverable so a relevant one can be viewed — which revives it —
+ * instead of silently aging into the archive. [] on empty/hostile query.
+ */
 export function searchSkills(db: Database, query: string, k: number): SkillRow[] {
   const match = sanitizeFtsQuery(query);
   if (!match) return [];
@@ -203,7 +209,7 @@ export function searchSkills(db: Database, query: string, k: number): SkillRow[]
     return db
       .query(
         `SELECT s.* FROM skills_fts JOIN skills s ON s.id = skills_fts.rowid
-          WHERE skills_fts MATCH ? AND s.status = 'active'
+          WHERE skills_fts MATCH ? AND s.status IN ('active', 'stale')
           ORDER BY rank LIMIT ?`,
       )
       .all(match, k) as SkillRow[];
@@ -222,9 +228,13 @@ export function listSkills(db: Database, f: { status?: SkillStatus }): SkillRow[
 export interface PatchArgs { old: string; new: string; now: number }
 
 /**
- * Substring-replace inside an active skill's body file. Exactly one occurrence
- * must match (0 or ≥2 → SkillError, file untouched). Snapshots the pre-edit
- * file to `<path>.bak.<now>` first, then writes, then bumps patch_count.
+ * Substring-replace inside an active skill's BODY. The match is scoped to the
+ * body only — frontmatter (name/description) is immutable after create, since
+ * the FTS index deliberately has no UPDATE trigger. Exactly one occurrence must
+ * match (0 or ≥2 → SkillError, file untouched). The patched body re-runs the
+ * create-time gates (parse validation, do-NOT-capture, threat scan) BEFORE
+ * anything is written; only then snapshot `<path>.bak.<now>`, write, and bump
+ * patch_count.
  */
 export function patchSkill(db: Database, dir: string, name: string, a: PatchArgs): SkillRow {
   const row = getSkill(db, name);
@@ -234,12 +244,20 @@ export function patchSkill(db: Database, dir: string, name: string, a: PatchArgs
   }
   const needle = a.old ?? "";
   if (!needle) throw new SkillError("empty match text");
-  const current = readFileSync(row.path, "utf8");
-  const count = current.split(needle).length - 1;
+  const parsed = parseSkillMd(readFileSync(row.path, "utf8"));
+  const count = parsed.body.split(needle).length - 1;
   if (count === 0) throw new SkillError(`no match for "${needle}" in skill "${name}"`);
   if (count > 1) throw new SkillError(`${count} (multiple) matches for "${needle}" in skill "${name}" — be more specific`);
-  const updated = current.replace(needle, a.new);
-  // Snapshot first, then overwrite the body, then bump the counter.
+  const newBody = parsed.body.replace(needle, a.new);
+  const updated = renderSkillMd(parsed.name, parsed.description, newBody);
+  const reparsed = parseSkillMd(updated); // rejects a patch that empties the body
+  const nonReusable = rejectNonReusable(reparsed.body);
+  if (nonReusable) throw new SkillError(nonReusable);
+  const threats = scanThreats(`${reparsed.name} ${reparsed.description} ${row.tags} ${reparsed.body}`, "strict");
+  if (threats.length) {
+    throw new SkillError(`patch rejected — the patched body trips the threat scan (${threats.join(", ")}); file unchanged`);
+  }
+  // All gates passed: snapshot, then overwrite the body, then bump the counter.
   copyFileSync(row.path, `${row.path}.bak.${a.now}`);
   writeFileSync(row.path, updated);
   db.query("UPDATE skills SET patch_count = patch_count + 1, updated_ts = ? WHERE id = ?").run(a.now, row.id);
@@ -259,13 +277,15 @@ function moveAndSetStatus(
   return getSkill(db, name)!;
 }
 
-/** Soft-delete: active → archived, body moved to <dir>/.archive/<name>.md. */
+/** Soft-delete: active/stale → archived, body moved to <dir>/.archive/<name>.md. */
 export function archiveSkill(db: Database, dir: string, name: string, now: number): SkillRow {
   const row = getSkill(db, name);
   if (!row) throw new SkillError(`no skill named "${name}"`);
-  if (row.status !== "active") throw new SkillError(`skill "${name}" is not active (it is ${row.status})`);
+  if (row.status !== "active" && row.status !== "stale") {
+    throw new SkillError(`skill "${name}" is not active (it is ${row.status})`);
+  }
   const dest = join(dir, ARCHIVE_SUBDIR, `${name}.md`);
-  return moveAndSetStatus(db, name, "active", "archived", row.path, dest, now);
+  return moveAndSetStatus(db, name, row.status, "archived", row.path, dest, now);
 }
 
 /** Reverse an archive: archived → active, body moved back to <dir>/<name>.md. */
@@ -287,7 +307,7 @@ export function activateSkill(db: Database, dir: string, name: string, now: numb
   if (!row) throw new SkillError(`no skill named "${name}"`);
   if (row.status !== "quarantined") throw new SkillError(`skill "${name}" is not quarantined (it is ${row.status})`);
   const parsed = parseSkillMd(readFileSync(row.path, "utf8"));
-  const threats = scanThreats(`${parsed.name} ${parsed.description} ${parsed.body}`, "strict");
+  const threats = scanThreats(`${parsed.name} ${parsed.description} ${row.tags} ${parsed.body}`, "strict");
   if (threats.length) {
     throw new SkillError(
       `skill "${name}" still trips the threat scan (${threats.join(", ")}) — fix or archive it instead of activating`,
@@ -295,6 +315,81 @@ export function activateSkill(db: Database, dir: string, name: string, now: numb
   }
   db.query("UPDATE skills SET status = 'active', updated_ts = ? WHERE id = ?").run(now, row.id);
   return getSkill(db, name)!;
+}
+
+/** Pin (or unpin) an active/stale skill — pinned skills are exempt from curate's auto-lifecycle. */
+export function pinSkill(db: Database, name: string, pinned: boolean, now: number): SkillRow {
+  const row = getSkill(db, name);
+  if (!row) throw new SkillError(`no skill named "${name}"`);
+  if (row.status === "quarantined" || row.status === "archived") {
+    throw new SkillError(`skill "${name}" is ${row.status} — only active/stale skills can be (un)pinned`);
+  }
+  db.query("UPDATE skills SET pinned = ?, updated_ts = ? WHERE id = ?").run(pinned ? 1 : 0, now, row.id);
+  return getSkill(db, name)!;
+}
+
+/**
+ * Dedup merge: archive the narrow skill and record which active umbrella skill
+ * absorbed it (the curator creates/patches the umbrella itself beforehand via
+ * create/patch). The narrow body stays recoverable under skills/.archive/.
+ */
+export function absorbSkill(db: Database, dir: string, narrow: string, umbrella: string, now: number): SkillRow {
+  if (narrow === umbrella) throw new SkillError("a skill cannot absorb itself");
+  const n = getSkill(db, narrow);
+  if (!n) throw new SkillError(`no skill named "${narrow}"`);
+  const u = getSkill(db, umbrella);
+  if (!u) throw new SkillError(`no skill named "${umbrella}"`);
+  if (u.status !== "active") throw new SkillError(`umbrella skill "${umbrella}" is not active (it is ${u.status})`);
+  const out = archiveSkill(db, dir, narrow, now); // also validates narrow is active/stale
+  db.query("UPDATE skills SET absorbed_into = ? WHERE id = ?").run(umbrella, out.id);
+  return getSkill(db, narrow)!;
+}
+
+export const STALE_AFTER_DAYS = Number(process.env.SKILL_STALE_DAYS ?? 30);
+export const ARCHIVE_AFTER_DAYS = Number(process.env.SKILL_ARCHIVE_DAYS ?? 90);
+
+export interface CurateReport {
+  staled: string[];
+  archived: string[];
+  pinnedExempt: string[];
+  counts: { active: number; stale: number; quarantined: number; archived: number };
+}
+
+/**
+ * Deterministic half of the weekly curator: timestamp-based lifecycle over the
+ * idle clock `now - (last_used_at ?? created_ts)`. Idle ≥30d: active → stale
+ * (still searchable; view revives). Idle ≥90d: stale → archived (file moved to
+ * .archive/, never deleted). One transition per skill per run — the archive
+ * pass walks the PREVIOUSLY-stale set first, so even an ancient skill takes two
+ * runs to reach the archive, never one surprise jump. Pinned skills are exempt
+ * and reported; quarantined skills are never touched. The LLM half (dedup into
+ * umbrella skills via create/absorb) is driven by the scheduled prompt, not
+ * this function.
+ */
+export function curateSkills(db: Database, dir: string, now: number): CurateReport {
+  const staled: string[] = [];
+  const archived: string[] = [];
+  const pinnedExempt: string[] = [];
+  const idleOf = (r: SkillRow) => now - (r.last_used_at ?? r.created_ts);
+
+  for (const r of listSkills(db, { status: "stale" })) {
+    if (idleOf(r) < ARCHIVE_AFTER_DAYS * 86_400) continue;
+    if (r.pinned) { pinnedExempt.push(r.name); continue; }
+    archiveSkill(db, dir, r.name, now);
+    archived.push(r.name);
+  }
+  for (const r of listSkills(db, { status: "active" })) {
+    if (idleOf(r) < STALE_AFTER_DAYS * 86_400) continue;
+    if (r.pinned) { pinnedExempt.push(r.name); continue; }
+    db.query("UPDATE skills SET status = 'stale', updated_ts = ? WHERE id = ?").run(now, r.id);
+    staled.push(r.name);
+  }
+
+  const counts = { active: 0, stale: 0, quarantined: 0, archived: 0 };
+  for (const row of db.query("SELECT status, COUNT(1) n FROM skills GROUP BY status").all() as { status: SkillStatus; n: number }[]) {
+    counts[row.status] = row.n;
+  }
+  return { staled, archived, pinnedExempt, counts };
 }
 
 export const SKILLS_TOP_N = Number(process.env.SKILLS_TOP_N ?? 5);

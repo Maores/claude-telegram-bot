@@ -117,14 +117,21 @@ export async function groqTranscribe(
   const fetchFn = opts.fetchFn ?? fetch;
   const timeoutMs = opts.timeoutMs ?? VOICE_TIMEOUT_MS;
 
+  // Read eagerly into a named File: Groq validates by the uploaded filename's
+  // extension and rejects Telegram's .oga (same ogg/opus container) — live 400
+  // "file must be one of [... ogg opus ...]" 2026-06-11. Bun's FormData ignores
+  // the explicit filename argument for lazy Bun.file blobs (the full PATH went
+  // out as the name), so only an in-memory File reliably carries "voice.ogg".
+  // Voice notes are capped at VOICE_MAX_SEC ≈ a couple of MB — fine to hold.
+  const audio = new File([await Bun.file(path).arrayBuffer()], "voice.ogg", {
+    type: "audio/ogg",
+  });
+
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     // Rebuilt per attempt — a FormData body may not be reusable after a send.
     const form = new FormData();
-    // Always name the part .ogg: Groq validates by the uploaded filename's
-    // extension and rejects Telegram's .oga (same ogg/opus container) —
-    // live-confirmed 400 "file must be one of [... ogg opus ...]" 2026-06-11.
-    form.append("file", Bun.file(path), "voice.ogg");
+    form.append("file", audio);
     form.append("model", opts.model ?? GROQ_STT_MODEL);
     form.append("response_format", "verbose_json");
     // 4xx and malformed-body errors are final; network/abort errors retry once.

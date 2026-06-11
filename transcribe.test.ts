@@ -1,4 +1,6 @@
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
+import { join } from "node:path";
+import { writeFileSync as writeTestFile, rmSync as rmTestFile } from "node:fs";
 import {
   envNum,
   resolveBackend,
@@ -10,6 +12,14 @@ import {
   localTranscribe,
   transcribeVoice,
 } from "./transcribe";
+
+// groqTranscribe reads the audio bytes eagerly (to upload a NAMED File — Groq
+// rejects .oga by extension and Bun's FormData drops explicit filenames for
+// lazy blobs), so the fake path must be a real file. Bytes are irrelevant:
+// every test injects fetchFn.
+const AUDIO_TMP = join(import.meta.dir, "transcribe.test.audio.oga");
+writeTestFile(AUDIO_TMP, "OggS-not-really-audio");
+afterAll(() => rmTestFile(AUDIO_TMP, { force: true }));
 
 // --- envNum: numeric env parsing that survives empty strings ------------------
 
@@ -142,8 +152,8 @@ test("parseLocalOutput throws when the text field is missing", () => {
 });
 
 // --- groqTranscribe: hosted whisper via OpenAI-compatible endpoint ------------
-// fetchFn is injected; no network. The audio file itself is never read by the
-// fake, so a nonexistent path is fine (Bun.file is lazy).
+// fetchFn is injected; no network. groqTranscribe DOES read the audio bytes
+// eagerly (named-File upload), hence the real AUDIO_TMP file above.
 
 function groqOk(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200 });
@@ -159,7 +169,7 @@ test("groqTranscribe sends auth, model, verbose_json — and parses the reply", 
     });
   }) as typeof fetch;
 
-  const tr = await groqTranscribe("uploads/none.oga", { apiKey: "gsk_test", fetchFn });
+  const tr = await groqTranscribe(AUDIO_TMP, { apiKey: "gsk_test", fetchFn });
   expect(tr.text).toBe("תזכיר לי מחר");
   expect(tr.confidence).toBeCloseTo(0.9, 5);
 
@@ -176,7 +186,7 @@ test("groqTranscribe sends auth, model, verbose_json — and parses the reply", 
 
 test("groqTranscribe yields null confidence when segments are absent", async () => {
   const fetchFn = (async () => groqOk({ text: "hi" })) as typeof fetch;
-  const tr = await groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn });
+  const tr = await groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn });
   expect(tr).toEqual({ text: "hi", confidence: null });
 });
 
@@ -187,7 +197,7 @@ test("groqTranscribe retries once on a 5xx and then succeeds", async () => {
     if (n === 1) return new Response("boom", { status: 500 });
     return groqOk({ text: "ok" });
   }) as typeof fetch;
-  const tr = await groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn });
+  const tr = await groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn });
   expect(tr.text).toBe("ok");
   expect(n).toBe(2);
 });
@@ -198,7 +208,7 @@ test("groqTranscribe does NOT retry a 4xx (e.g. 429) and throws with the status"
     n++;
     return new Response('{"error": "rate limit"}', { status: 429 });
   }) as typeof fetch;
-  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+  await expect(groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn })).rejects.toThrow(
     /groq HTTP 429/,
   );
   expect(n).toBe(1);
@@ -210,7 +220,7 @@ test("groqTranscribe retries once on a network error, then surfaces it", async (
     n++;
     throw new Error("connect ECONNREFUSED");
   }) as typeof fetch;
-  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+  await expect(groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn })).rejects.toThrow(
     /ECONNREFUSED/,
   );
   expect(n).toBe(2);
@@ -219,13 +229,13 @@ test("groqTranscribe retries once on a network error, then surfaces it", async (
 test("groqTranscribe throws without an api key", async () => {
   const fetchFn = (async () => groqOk({ text: "x" })) as typeof fetch;
   await expect(
-    groqTranscribe("uploads/none.oga", { apiKey: "", fetchFn }),
+    groqTranscribe(AUDIO_TMP, { apiKey: "", fetchFn }),
   ).rejects.toThrow(/GROQ_API_KEY/);
 });
 
 test("groqTranscribe throws on a 200 whose body has no text field", async () => {
   const fetchFn = (async () => groqOk({ uh: "oh" })) as typeof fetch;
-  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+  await expect(groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn })).rejects.toThrow(
     /no text field/,
   );
 });
@@ -236,7 +246,7 @@ test("groqTranscribe gives up after two 5xx attempts and throws the last error",
     n++;
     return new Response("boom", { status: 500 });
   }) as typeof fetch;
-  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+  await expect(groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn })).rejects.toThrow(
     /groq HTTP 500/,
   );
   expect(n).toBe(2);
@@ -248,7 +258,7 @@ test("groqTranscribe treats a malformed 200 body as final (no retry)", async () 
     n++;
     return new Response("<html>not json</html>", { status: 200 });
   }) as typeof fetch;
-  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+  await expect(groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn })).rejects.toThrow(
     /malformed body/,
   );
   expect(n).toBe(1);
@@ -280,6 +290,8 @@ test("localTranscribe runs the template through /bin/sh and parses stdout JSON",
     return fakeProc('{"text": "שלום עולם", "confidence": 0.4}');
   }) as unknown as typeof Bun.spawn;
 
+  // Literal path on purpose: local backend never reads the file itself (the
+  // command does), and this pins the exact quoting handed to /bin/sh.
   const tr = await localTranscribe("/up/v.oga", { cmd: "wsp {input}", spawnFn });
   expect(tr).toEqual({ text: "שלום עולם", confidence: 0.4 });
   expect(argvSeen[0][0]).toBe("/bin/sh");
@@ -289,13 +301,13 @@ test("localTranscribe runs the template through /bin/sh and parses stdout JSON",
 
 test("localTranscribe throws when the command exits non-zero, including stderr", async () => {
   const spawnFn = (() => fakeProc("", 127, "wsp: not found")) as unknown as typeof Bun.spawn;
-  await expect(localTranscribe("/up/v.oga", { cmd: "wsp {input}", spawnFn })).rejects.toThrow(
+  await expect(localTranscribe(AUDIO_TMP, { cmd: "wsp {input}", spawnFn })).rejects.toThrow(
     /exited 127.*not found/s,
   );
 });
 
 test("localTranscribe throws when TRANSCRIBE_CMD is not configured", async () => {
-  await expect(localTranscribe("/up/v.oga", { cmd: "" })).rejects.toThrow(/TRANSCRIBE_CMD/);
+  await expect(localTranscribe(AUDIO_TMP, { cmd: "" })).rejects.toThrow(/TRANSCRIBE_CMD/);
 });
 
 test("localTranscribe SIGKILLs a stalled process at the timeout and rejects", async () => {
@@ -313,7 +325,7 @@ test("localTranscribe SIGKILLs a stalled process at the timeout and rejects", as
   })) as unknown as typeof Bun.spawn;
 
   await expect(
-    localTranscribe("/up/v.oga", { cmd: "wsp {input}", spawnFn, timeoutMs: 10 }),
+    localTranscribe(AUDIO_TMP, { cmd: "wsp {input}", spawnFn, timeoutMs: 10 }),
   ).rejects.toThrow(/exited -1/);
   expect(killedWith).toBe("SIGKILL");
 });
@@ -321,18 +333,18 @@ test("localTranscribe SIGKILLs a stalled process at the timeout and rejects", as
 // --- transcribeVoice: dispatch by resolved backend ------------------------------
 
 test("transcribeVoice throws a clear error when no backend is configured", async () => {
-  await expect(transcribeVoice("/up/v.oga", {})).rejects.toThrow(/not configured/);
+  await expect(transcribeVoice(AUDIO_TMP, {})).rejects.toThrow(/not configured/);
 });
 
 test("transcribeVoice dispatches to local when only a command is configured", async () => {
   const spawnFn = (() => fakeProc('{"text": "hi"}')) as unknown as typeof Bun.spawn;
-  const tr = await transcribeVoice("/up/v.oga", { TRANSCRIBE_CMD: "wsp {input}" }, { spawnFn });
+  const tr = await transcribeVoice(AUDIO_TMP, { TRANSCRIBE_CMD: "wsp {input}" }, { spawnFn });
   expect(tr.text).toBe("hi");
 });
 
 test("transcribeVoice dispatches to groq when a key is configured", async () => {
   const fetchFn = (async () =>
     new Response(JSON.stringify({ text: "hey" }), { status: 200 })) as typeof fetch;
-  const tr = await transcribeVoice("/up/v.oga", { GROQ_API_KEY: "k" }, { fetchFn });
+  const tr = await transcribeVoice(AUDIO_TMP, { GROQ_API_KEY: "k" }, { fetchFn });
   expect(tr.text).toBe("hey");
 });

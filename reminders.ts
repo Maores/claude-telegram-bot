@@ -173,9 +173,9 @@ export function saveFollowups(list: Followup[]) {
 export function addFollowup(chatId: number, text: string, messageId: number, firedAt: number): Followup {
   const list = loadFollowups();
   const ids = new Set(list.map((f) => f.id));
-  let n = 1;
-  while (ids.has("f" + n)) n++;
-  const f: Followup = { id: "f" + n, chatId, text, messageId, firedAt, status: "pending", nudged: false };
+  let id = "f" + Date.now();
+  while (ids.has(id)) id += "x"; // same-ms safety bump
+  const f: Followup = { id, chatId, text, messageId, firedAt, status: "pending", nudged: false };
   list.push(f);
   saveFollowups(list);
   return f;

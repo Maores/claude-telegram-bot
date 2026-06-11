@@ -150,7 +150,7 @@ nothing breaks.
    echo 'GROQ_API_KEY=gsk_...' >> /home/claudebot/.claude/channels/telegram/.env
    ```
 
-3. Restart the poller (tmux `bot` window → Ctrl-C → `./start.sh`). Done —
+3. Restart the poller (`sudo systemctl restart telegram-agent`). Done —
    `TRANSCRIBE_BACKEND` auto-resolves to `groq` when the key is present.
 
 Tuning (all optional, in the same `.env`):
@@ -226,38 +226,54 @@ nothing else to set up.
 
 ---
 
-## Step 11 — Run it (server)
+## Step 11 — Run it as a systemd service (server)
+
+The poller runs under systemd (since 2026-06-11; it replaced tmux + an
+`@reboot` cron after a crash took its logs with it — journald keeps the
+evidence and `Restart=always` self-heals). Install the unit:
 
 ```bash
-chmod +x /home/claudebot/claude-bot/start.sh
-tmux new-session -s bot
-/home/claudebot/claude-bot/start.sh
+sudo tee /etc/systemd/system/telegram-agent.service > /dev/null << 'EOF'
+[Unit]
+Description=Telegram agent poller (claude-telegram-bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=claudebot
+WorkingDirectory=/home/claudebot/claude-bot
+EnvironmentFile=/home/claudebot/.claude/channels/telegram/.env
+Environment=TZ=Asia/Jerusalem
+Environment=PATH=/home/claudebot/.bun/bin:/home/claudebot/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/claudebot/.bun/bin/bun run poller.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now telegram-agent
 ```
 
-You should see:
+(No memory limits on purpose: claude child processes need the 1 GB box's
+headroom; the `.env` must stay plain `KEY=VALUE` lines — systemd parses it
+directly, no shell quoting.)
 
-```
-[BOT] Poller started as @<YOUR_BOT_USERNAME>
-```
-
-Message your bot from Telegram. Expect:
-
-```
-[MSG] <YOUR_NAME>: hello
-[DONE] replied to <YOUR_TELEGRAM_USER_ID>
-```
-
-Detach (leaves it running): **Ctrl+B**, then **D**.
-Reattach later: `tmux attach -t bot`.
-
----
-
-## Step 12 — Auto-restart on reboot (server)
+Check it:
 
 ```bash
-(crontab -l 2>/dev/null; echo '@reboot /home/claudebot/claude-bot/start.sh >> /home/claudebot/claude-bot/poller.log 2>&1') | crontab -
-crontab -l   # confirm the entry
+systemctl status telegram-agent
+sudo journalctl -u telegram-agent -f     # live logs; expect:
+# [BOT] Poller started as @<YOUR_BOT_USERNAME>
 ```
+
+Message your bot from Telegram. Expect `[MSG] …` / `[DONE] …` lines in the
+journal. Reboot survival comes from `enable` — no cron entry needed (the old
+`@reboot start.sh` line must NOT coexist with the service: two pollers fight
+over getUpdates with 409s). `start.sh` remains useful for a one-off
+foreground run while debugging.
 
 ---
 
@@ -270,9 +286,9 @@ git add . ; git commit -m "update bot" ; git push
 
 ```bash
 # (server)
-cd ~/claude-bot && git pull
-tmux attach -t bot      # Ctrl+C to stop, then:
-./start.sh              # Ctrl+B, D to detach
+cd ~/claude-bot && git fetch origin && git reset --hard origin/main
+sudo systemctl restart telegram-agent
+sudo journalctl -u telegram-agent -n 5 --no-pager   # confirm the banner
 ```
 
 ---
@@ -308,4 +324,5 @@ Then document the new tool in `CLAUDE.md` (under "Permissions granted" / a new
 - **`start.sh: /bin/bash^M: bad interpreter`** — the file got CRLF endings. This
   repo's `.gitattributes` forces LF, so re-clone or run `sed -i 's/\r$//'
   start.sh`.
-- **Bot stops after reboot** — check `crontab -l` and `tail -50 poller.log`.
+- **Bot stops after reboot** — `systemctl status telegram-agent` and
+  `sudo journalctl -u telegram-agent -n 50`; the unit must be `enabled`.

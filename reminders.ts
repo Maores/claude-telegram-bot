@@ -9,7 +9,7 @@
  * reminders) uses the process timezone — start.sh sets TZ=Asia/Jerusalem.
  */
 
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export interface Repeat {
@@ -28,6 +28,53 @@ export interface Reminder {
 /** Read the store path lazily so tests can override REMINDERS_FILE at runtime. */
 function storePath(): string {
   return process.env.REMINDERS_FILE ?? join(import.meta.dir, "reminders.json");
+}
+
+/** Cross-process mutation lock. The poller and the remind.ts CLI both
+ *  load→mutate→save these JSON stores; without a lock, interleaving loses
+ *  updates (e.g. a reminder added during a popDue tick). O_EXCL lockfile,
+ *  stale-steal after staleMs (a crashed holder), and past timeoutMs we
+ *  proceed WITHOUT the lock — a stuck lock must never brick reminders
+ *  (availability bias, matching the unlocked behavior this replaces).
+ *  Sync by design: every caller is sync and the hold is one small JSON
+ *  read+write. Reads stay lock-free — the atomic rename in save gives
+ *  them a consistent snapshot. */
+export function withFileLock<T>(
+  path: string,
+  fn: () => T,
+  opts: { timeoutMs?: number; staleMs?: number } = {},
+): T {
+  const timeoutMs = opts.timeoutMs ?? 1500;
+  const staleMs = opts.staleMs ?? 5000;
+  const lockPath = path + ".lock";
+  const deadline = Date.now() + timeoutMs;
+  let acquired = false;
+  while (!acquired && Date.now() < deadline) {
+    try {
+      writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+      acquired = true;
+    } catch {
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > staleMs) {
+          rmSync(lockPath, { force: true }); // crashed holder — steal it
+          continue;
+        }
+      } catch {} // lock vanished between attempts — just retry
+      Bun.sleepSync(25);
+    }
+  }
+  if (!acquired) {
+    console.error(`[LOCK] ${lockPath} busy after ${timeoutMs}ms — proceeding without it`);
+  }
+  try {
+    return fn();
+  } finally {
+    if (acquired) {
+      try {
+        rmSync(lockPath, { force: true });
+      } catch {}
+    }
+  }
 }
 
 export function loadStore(): Reminder[] {
@@ -66,11 +113,13 @@ export function nextFire(nowEpoch: number, hour: number, minute: number, days: n
 }
 
 export function addOnce(chatId: number, fireAt: number, text: string): Reminder {
-  const list = loadStore();
-  const r: Reminder = { id: genId(list), chatId, fireAt, text, repeat: null };
-  list.push(r);
-  saveStore(list);
-  return r;
+  return withFileLock(storePath(), () => {
+    const list = loadStore();
+    const r: Reminder = { id: genId(list), chatId, fireAt, text, repeat: null };
+    list.push(r);
+    saveStore(list);
+    return r;
+  });
 }
 
 export function addRepeat(
@@ -81,12 +130,14 @@ export function addRepeat(
   text: string,
   nowEpoch = Math.floor(Date.now() / 1000),
 ): Reminder {
-  const list = loadStore();
-  const fireAt = nextFire(nowEpoch, hour, minute, days);
-  const r: Reminder = { id: genId(list), chatId, fireAt, text, repeat: { hour, minute, days } };
-  list.push(r);
-  saveStore(list);
-  return r;
+  return withFileLock(storePath(), () => {
+    const list = loadStore();
+    const fireAt = nextFire(nowEpoch, hour, minute, days);
+    const r: Reminder = { id: genId(list), chatId, fireAt, text, repeat: { hour, minute, days } };
+    list.push(r);
+    saveStore(list);
+    return r;
+  });
 }
 
 export function listFor(chatId: number): Reminder[] {
@@ -96,31 +147,35 @@ export function listFor(chatId: number): Reminder[] {
 }
 
 export function cancel(chatId: number, id: string): boolean {
-  const list = loadStore();
-  const idx = list.findIndex((r) => r.chatId === chatId && r.id === id);
-  if (idx < 0) return false;
-  list.splice(idx, 1);
-  saveStore(list);
-  return true;
+  return withFileLock(storePath(), () => {
+    const list = loadStore();
+    const idx = list.findIndex((r) => r.chatId === chatId && r.id === id);
+    if (idx < 0) return false;
+    list.splice(idx, 1);
+    saveStore(list);
+    return true;
+  });
 }
 
 /** Return reminders due at/before now; remove one-time, reschedule recurring. */
 export function popDue(nowEpoch = Math.floor(Date.now() / 1000)): Reminder[] {
-  const list = loadStore();
-  const due: Reminder[] = [];
-  const keep: Reminder[] = [];
-  for (const r of list) {
-    if (r.fireAt <= nowEpoch) {
-      due.push(r);
-      if (r.repeat) {
-        keep.push({ ...r, fireAt: nextFire(nowEpoch, r.repeat.hour, r.repeat.minute, r.repeat.days) });
+  return withFileLock(storePath(), () => {
+    const list = loadStore();
+    const due: Reminder[] = [];
+    const keep: Reminder[] = [];
+    for (const r of list) {
+      if (r.fireAt <= nowEpoch) {
+        due.push(r);
+        if (r.repeat) {
+          keep.push({ ...r, fireAt: nextFire(nowEpoch, r.repeat.hour, r.repeat.minute, r.repeat.days) });
+        }
+      } else {
+        keep.push(r);
       }
-    } else {
-      keep.push(r);
     }
-  }
-  if (due.length) saveStore(keep);
-  return due;
+    if (due.length) saveStore(keep);
+    return due;
+  });
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -171,14 +226,16 @@ export function saveFollowups(list: Followup[]) {
 }
 
 export function addFollowup(chatId: number, text: string, messageId: number, firedAt: number): Followup {
-  const list = loadFollowups();
-  const ids = new Set(list.map((f) => f.id));
-  let id = "f" + Date.now();
-  while (ids.has(id)) id += "x"; // same-ms safety bump
-  const f: Followup = { id, chatId, text, messageId, firedAt, status: "pending", nudged: false };
-  list.push(f);
-  saveFollowups(list);
-  return f;
+  return withFileLock(followupsPath(), () => {
+    const list = loadFollowups();
+    const ids = new Set(list.map((f) => f.id));
+    let id = "f" + Date.now();
+    while (ids.has(id)) id += "x"; // same-ms safety bump
+    const f: Followup = { id, chatId, text, messageId, firedAt, status: "pending", nudged: false };
+    list.push(f);
+    saveFollowups(list);
+    return f;
+  });
 }
 
 export function getFollowup(id: string): Followup | null {
@@ -187,29 +244,35 @@ export function getFollowup(id: string): Followup | null {
 
 /** pending → done/snoozed exactly once; returns null if missing or resolved. */
 export function resolveFollowup(id: string, status: "done" | "snoozed"): Followup | null {
-  const list = loadFollowups();
-  const f = list.find((x) => x.id === id);
-  if (!f || f.status !== "pending") return null;
-  f.status = status;
-  saveFollowups(list);
-  return f;
+  return withFileLock(followupsPath(), () => {
+    const list = loadFollowups();
+    const f = list.find((x) => x.id === id);
+    if (!f || f.status !== "pending") return null;
+    f.status = status;
+    saveFollowups(list);
+    return f;
+  });
 }
 
 /** Point the follow-up at a new message (the nudge takes over the buttons). */
 export function rebindFollowup(id: string, newMessageId: number) {
-  const list = loadFollowups();
-  const f = list.find((x) => x.id === id);
-  if (!f) return;
-  f.messageId = newMessageId;
-  saveFollowups(list);
+  withFileLock(followupsPath(), () => {
+    const list = loadFollowups();
+    const f = list.find((x) => x.id === id);
+    if (!f) return;
+    f.messageId = newMessageId;
+    saveFollowups(list);
+  });
 }
 
 export function markNudged(id: string) {
-  const list = loadFollowups();
-  const f = list.find((x) => x.id === id);
-  if (!f) return;
-  f.nudged = true;
-  saveFollowups(list);
+  withFileLock(followupsPath(), () => {
+    const list = loadFollowups();
+    const f = list.find((x) => x.id === id);
+    if (!f) return;
+    f.nudged = true;
+    saveFollowups(list);
+  });
 }
 
 /** Pending, never-nudged follow-ups whose reminder fired >= age ago. */
@@ -221,8 +284,10 @@ export function dueNudges(nowEpoch: number, ageSec = NUDGE_AFTER_S): Followup[] 
 
 /** Drop RESOLVED follow-ups older than 7 days. Returns how many were removed. */
 export function pruneFollowups(nowEpoch: number): number {
-  const list = loadFollowups();
-  const keep = list.filter((f) => f.status === "pending" || f.firedAt > nowEpoch - PRUNE_AFTER_S);
-  if (keep.length !== list.length) saveFollowups(keep);
-  return list.length - keep.length;
+  return withFileLock(followupsPath(), () => {
+    const list = loadFollowups();
+    const keep = list.filter((f) => f.status === "pending" || f.firedAt > nowEpoch - PRUNE_AFTER_S);
+    if (keep.length !== list.length) saveFollowups(keep);
+    return list.length - keep.length;
+  });
 }

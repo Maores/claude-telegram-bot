@@ -104,6 +104,10 @@ test("deriveConfidence clamps into [0, 1] and survives missing start/end", () =>
   expect(c).toBe(1);
 });
 
+test("deriveConfidence ignores NaN avg_logprob segments (typeof NaN is 'number')", () => {
+  expect(deriveConfidence([{ avg_logprob: NaN, start: 0, end: 1 }])).toBeNull();
+});
+
 // --- parseLocalOutput: the local-command JSON contract -------------------------
 
 test("parseLocalOutput parses text and clamps confidence", () => {

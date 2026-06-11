@@ -68,7 +68,7 @@ export function deriveConfidence(segments: Segment[] | undefined): number | null
   let weighted = 0;
   let total = 0;
   for (const s of segments) {
-    if (typeof s.avg_logprob !== "number") continue;
+    if (typeof s.avg_logprob !== "number" || !Number.isFinite(s.avg_logprob)) continue;
     const dur = Math.max((s.end ?? 0) - (s.start ?? 0), 0.01);
     weighted += Math.exp(s.avg_logprob) * dur;
     total += dur;

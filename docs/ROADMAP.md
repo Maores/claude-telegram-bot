@@ -44,6 +44,13 @@ What makes it pleasant to use, every single day.
 - **Inline buttons** for the existing confirm flows (calendar/email "yes / no /
   change") — needs callback-query support in the poller, which also unlocks
   approval buttons for Phase 4's guard later.
+- **Reminder follow-ups** (Maor's request, 2026-06-11): after a reminder fires,
+  the bot checks back whether the task actually got done — inline buttons like
+  "done ✓" / "remind me again later". "Done" closes the loop; "later"
+  reschedules; either way no duplicate reminders pile up on the same topic.
+  Design talk pending: when the follow-up fires (immediately vs. after a while),
+  snooze intervals, and how it treats repeating reminders. First real consumer
+  of the callback-query infra above.
 
 ## Phase 6 — Voice
 

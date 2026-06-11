@@ -10,6 +10,8 @@ import {
   MAX_FILE_BYTES,
   autoSessionSpawn,
   AUTO_DISALLOWED_TOOLS,
+  isStopCommand,
+  outcomeReaction,
 } from "./poller.ts";
 
 test("short text stays one chunk", () => {
@@ -223,4 +225,34 @@ test("autoSessionSpawn disallows reminder scheduling at the tool layer", () => {
 
 test("autoSessionSpawn flags the session so the guard hook tightens it", () => {
   expect(autoSessionSpawn().env.CLAUDE_AUTO_SESSION).toBe("1");
+});
+
+// --- isStopCommand: the /stop interrupt (phase 5) -----------------------------
+
+test("isStopCommand matches /stop exactly and with the bot @mention", () => {
+  expect(isStopCommand("/stop", "maores_assistant_bot")).toBe(true);
+  expect(isStopCommand("/stop@maores_assistant_bot", "maores_assistant_bot")).toBe(true);
+  expect(isStopCommand("  /stop  ", "maores_assistant_bot")).toBe(true);
+  expect(isStopCommand("/STOP", "maores_assistant_bot")).toBe(true); // commands are case-insensitive
+});
+
+test("isStopCommand ignores normal messages and other commands", () => {
+  expect(isStopCommand("/stop now", "maores_assistant_bot")).toBe(false);
+  expect(isStopCommand("stop", "maores_assistant_bot")).toBe(false);
+  expect(isStopCommand("please /stop", "maores_assistant_bot")).toBe(false);
+  expect(isStopCommand("/stop@otherbot", "maores_assistant_bot")).toBe(false);
+  expect(isStopCommand("", "maores_assistant_bot")).toBe(false);
+  expect(isStopCommand("/stopwatch", "maores_assistant_bot")).toBe(false);
+});
+
+test("isStopCommand handles a missing/unknown bot username", () => {
+  expect(isStopCommand("/stop", "")).toBe(true);
+  expect(isStopCommand("/stop@maores_assistant_bot", "")).toBe(false); // can't confirm an unknown mention
+});
+
+// --- outcomeReaction: 👍 / 👎 ack on finish -----------------------------------
+
+test("outcomeReaction maps success/failure to 👍/👎", () => {
+  expect(outcomeReaction(true)).toBe("👍");
+  expect(outcomeReaction(false)).toBe("👎");
 });

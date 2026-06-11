@@ -169,7 +169,9 @@ test("groqTranscribe sends auth, model, verbose_json — and parses the reply", 
   const form = calls[0].init.body as FormData;
   expect(form.get("model")).toBe("whisper-large-v3-turbo");
   expect(form.get("response_format")).toBe("verbose_json");
-  expect(form.get("file")).not.toBeNull();
+  // Groq validates the multipart FILENAME's extension; Telegram saves voice as
+  // .oga which Groq's list rejects (live 400, 2026-06-11) — must upload as .ogg.
+  expect((form.get("file") as File).name).toBe("voice.ogg");
 });
 
 test("groqTranscribe yields null confidence when segments are absent", async () => {

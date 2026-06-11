@@ -6,6 +6,9 @@ import {
   deriveConfidence,
   parseLocalOutput,
   groqTranscribe,
+  buildLocalCommand,
+  localTranscribe,
+  transcribeVoice,
 } from "./transcribe";
 
 // --- envNum: numeric env parsing that survives empty strings ------------------
@@ -247,4 +250,67 @@ test("groqTranscribe treats a malformed 200 body as final (no retry)", async () 
     /malformed body/,
   );
   expect(n).toBe(1);
+});
+
+// --- localTranscribe: configurable command template (hermes local_command) ----
+
+test("buildLocalCommand substitutes a shell-quoted path for every {input}", () => {
+  expect(buildLocalCommand("whisper {input} -o {input}.json", "/up/a.oga")).toBe(
+    "whisper '/up/a.oga' -o '/up/a.oga'.json",
+  );
+  // a single-quote in the path cannot break out of the quoting
+  expect(buildLocalCommand("cat {input}", "/up/a'b.oga")).toBe("cat '/up/a'\\''b.oga'");
+});
+
+function fakeProc(stdout: string, code = 0, stderr = "") {
+  return {
+    stdout: new Response(stdout).body,
+    stderr: new Response(stderr).body,
+    exited: Promise.resolve(code),
+    kill() {},
+  };
+}
+
+test("localTranscribe runs the template through /bin/sh and parses stdout JSON", async () => {
+  const argvSeen: string[][] = [];
+  const spawnFn = ((argv: string[]) => {
+    argvSeen.push(argv);
+    return fakeProc('{"text": "שלום עולם", "confidence": 0.4}');
+  }) as unknown as typeof Bun.spawn;
+
+  const tr = await localTranscribe("/up/v.oga", { cmd: "wsp {input}", spawnFn });
+  expect(tr).toEqual({ text: "שלום עולם", confidence: 0.4 });
+  expect(argvSeen[0][0]).toBe("/bin/sh");
+  expect(argvSeen[0][1]).toBe("-c");
+  expect(argvSeen[0][2]).toBe("wsp '/up/v.oga'");
+});
+
+test("localTranscribe throws when the command exits non-zero, including stderr", async () => {
+  const spawnFn = (() => fakeProc("", 127, "wsp: not found")) as unknown as typeof Bun.spawn;
+  await expect(localTranscribe("/up/v.oga", { cmd: "wsp {input}", spawnFn })).rejects.toThrow(
+    /exited 127.*not found/s,
+  );
+});
+
+test("localTranscribe throws when TRANSCRIBE_CMD is not configured", async () => {
+  await expect(localTranscribe("/up/v.oga", { cmd: "" })).rejects.toThrow(/TRANSCRIBE_CMD/);
+});
+
+// --- transcribeVoice: dispatch by resolved backend ------------------------------
+
+test("transcribeVoice throws a clear error when no backend is configured", async () => {
+  await expect(transcribeVoice("/up/v.oga", {})).rejects.toThrow(/not configured/);
+});
+
+test("transcribeVoice dispatches to local when only a command is configured", async () => {
+  const spawnFn = (() => fakeProc('{"text": "hi"}')) as unknown as typeof Bun.spawn;
+  const tr = await transcribeVoice("/up/v.oga", { TRANSCRIBE_CMD: "wsp {input}" }, { spawnFn });
+  expect(tr.text).toBe("hi");
+});
+
+test("transcribeVoice dispatches to groq when a key is configured", async () => {
+  const fetchFn = (async () =>
+    new Response(JSON.stringify({ text: "hey" }), { status: 200 })) as typeof fetch;
+  const tr = await transcribeVoice("/up/v.oga", { GROQ_API_KEY: "k" }, { fetchFn });
+  expect(tr.text).toBe("hey");
 });

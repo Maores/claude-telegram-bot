@@ -167,3 +167,68 @@ export async function groqTranscribe(
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
+
+/** Replace every {input} in the template with the single-quoted path. The
+ *  quote-escape ('\'') means a malicious filename cannot break out — though
+ *  in practice the poller always passes its own uploads/<ts>-voice.oga path. */
+export function buildLocalCommand(template: string, inputPath: string): string {
+  const quoted = `'${inputPath.replace(/'/g, `'\\''`)}'`;
+  return template.split("{input}").join(quoted);
+}
+
+/** Run the operator-configured TRANSCRIBE_CMD (e.g. ffmpeg → whisper.cpp; see
+ *  DEPLOY.md) and parse its stdout JSON. Killed after timeoutMs. */
+export async function localTranscribe(
+  path: string,
+  opts: {
+    cmd?: string;
+    timeoutMs?: number;
+    spawnFn?: typeof Bun.spawn;
+  } = {},
+): Promise<Transcript> {
+  const template = opts.cmd ?? process.env.TRANSCRIBE_CMD ?? "";
+  if (!template) throw new Error("TRANSCRIBE_CMD is not set");
+  const spawnFn = opts.spawnFn ?? Bun.spawn;
+  const timeoutMs = opts.timeoutMs ?? VOICE_TIMEOUT_MS;
+
+  const proc = spawnFn(["/bin/sh", "-c", buildLocalCommand(template, path)], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const killer = setTimeout(() => {
+    try {
+      proc.kill();
+    } catch {}
+  }, timeoutMs);
+  try {
+    const [code, out, err] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout as any).text(),
+      new Response(proc.stderr as any).text().catch(() => ""),
+    ]);
+    if (code !== 0) {
+      throw new Error(`local transcriber exited ${code}: ${err.slice(0, 200)}`);
+    }
+    return parseLocalOutput(out);
+  } finally {
+    clearTimeout(killer);
+  }
+}
+
+/** The poller's single entry point: resolve the backend from env, dispatch.
+ *  env/io are injectable for tests; production callers pass nothing. */
+export async function transcribeVoice(
+  path: string,
+  env: Record<string, string | undefined> = process.env,
+  io: { fetchFn?: typeof fetch; spawnFn?: typeof Bun.spawn } = {},
+): Promise<Transcript> {
+  const backend = resolveBackend(env);
+  if (backend === "groq") {
+    return groqTranscribe(path, { apiKey: env.GROQ_API_KEY, fetchFn: io.fetchFn });
+  }
+  if (backend === "local") {
+    return localTranscribe(path, { cmd: env.TRANSCRIBE_CMD, spawnFn: io.spawnFn });
+  }
+  throw new Error("voice transcription is not configured");
+}

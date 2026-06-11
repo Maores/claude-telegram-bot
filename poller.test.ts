@@ -8,6 +8,8 @@ import {
   isTooLarge,
   staleByName,
   MAX_FILE_BYTES,
+  autoSessionSpawn,
+  AUTO_DISALLOWED_TOOLS,
 } from "./poller.ts";
 
 test("short text stays one chunk", () => {
@@ -207,4 +209,18 @@ test("buildPrompt injects the available-skills block when skills is passed", () 
 test("buildPrompt omits the skills block when skills is empty", () => {
   const p = buildPrompt([], "Maor", "hi", [], "", "");
   expect(p).not.toContain("<available-skills>");
+});
+
+// --- autoSessionSpawn: least-privilege [AUTO] reminder sessions (phase 4) ------
+
+test("autoSessionSpawn disallows reminder scheduling at the tool layer", () => {
+  const s = autoSessionSpawn();
+  expect(s.extraArgs[0]).toBe("--disallowedTools");
+  expect(s.extraArgs).toContain("Bash(bun run remind.ts add-once *)");
+  expect(s.extraArgs).toContain("Bash(bun run remind.ts add-repeat *)");
+  expect(AUTO_DISALLOWED_TOOLS.length).toBeGreaterThan(0);
+});
+
+test("autoSessionSpawn flags the session so the guard hook tightens it", () => {
+  expect(autoSessionSpawn().env.CLAUDE_AUTO_SESSION).toBe("1");
 });

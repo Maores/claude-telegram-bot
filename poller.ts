@@ -400,6 +400,16 @@ class StreamRenderer {
   }
 }
 
+/** Extra, optional knobs for a single claude -p spawn. Used to put unattended
+ *  [AUTO] sessions in least-privilege mode without changing normal messages. */
+export interface SpawnOpts {
+  /** Appended to the claude argv (e.g. --disallowedTools …). Kept at the end so
+   *  a variadic flag can't swallow the base flags. */
+  extraArgs?: string[];
+  /** Merged into the child env (e.g. CLAUDE_AUTO_SESSION=1 for the guard hook). */
+  env?: Record<string, string>;
+}
+
 /** Run `claude -p` in streaming mode and render the reply to Telegram live.
  *  Returns the final answer text. */
 async function streamClaude(
@@ -407,16 +417,17 @@ async function streamClaude(
   chatId: number,
   placeholderId: number | null,
   model: string,
+  opts: SpawnOpts = {},
 ): Promise<string> {
   const proc = Bun.spawn(
     // prettier-ignore
-    [CLAUDE_BIN, "-p", "--model", model, "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--dangerously-skip-permissions"],
+    [CLAUDE_BIN, "-p", "--model", model, "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--dangerously-skip-permissions", ...(opts.extraArgs ?? [])],
     {
       cwd: PROJECT_DIR,
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, TELEGRAM_CHAT_ID: String(chatId) },
+      env: { ...process.env, TELEGRAM_CHAT_ID: String(chatId), ...(opts.env ?? {}) },
     },
   );
   const stderrP = new Response(proc.stderr).text().catch(() => "");
@@ -479,6 +490,32 @@ async function streamClaude(
     .render(final || "(no reply)")
     .catch((e) => console.error(`[ERR] final render: ${e?.message ?? e}`));
   return final;
+}
+
+// ---------------------------------------------------------------------------
+// Least-privilege [AUTO] sessions (phase 4 — protection floor)
+// ---------------------------------------------------------------------------
+
+/** Tools an [AUTO] reminder session may not use, denied at Claude Code's own
+ *  tool layer via --disallowedTools (verified present in this CLI). This stops
+ *  a reminder from scheduling more reminders — a self-replication guard. */
+export const AUTO_DISALLOWED_TOOLS = [
+  "Bash(bun run remind.ts add-once *)",
+  "Bash(bun run remind.ts add-repeat *)",
+];
+
+/** Spawn options that put an unattended [AUTO] session in least-privilege mode.
+ *  Two complementary layers: --disallowedTools blocks reminder scheduling at the
+ *  tool layer, and CLAUDE_AUTO_SESSION=1 lets the PreToolUse guard hook
+ *  (hooks/pretooluse-guard.ts) re-block reminders AND block Gmail draft creation
+ *  — the latter can't be named in --disallowedTools because the Gmail MCP
+ *  server id is per-deployment. Normal Telegram messages pass no opts and keep
+ *  today's full-permission behavior exactly. */
+export function autoSessionSpawn(): { extraArgs: string[]; env: Record<string, string> } {
+  return {
+    extraArgs: ["--disallowedTools", ...AUTO_DISALLOWED_TOOLS],
+    env: { CLAUDE_AUTO_SESSION: "1" },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -655,7 +692,8 @@ async function checkReminders() {
           console.error(`[ERR] skills: ${e?.message ?? e}`);
         }
         const fullPrompt = buildPrompt([], "Maor", autoPrompt, [], loadMemory(), skills);
-        await streamClaude(fullPrompt, r.chatId, ph.message_id, "sonnet");
+        // Unattended run → least-privilege: can't schedule reminders or file drafts.
+        await streamClaude(fullPrompt, r.chatId, ph.message_id, "sonnet", autoSessionSpawn());
       } else {
         await tg("sendMessage", { chat_id: r.chatId, text: `⏰ Reminder: ${r.text}` });
       }

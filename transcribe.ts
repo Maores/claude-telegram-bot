@@ -53,3 +53,44 @@ export function shouldEchoTranscript(
 ): boolean {
   return confidence !== null && confidence < threshold;
 }
+
+/** OpenAI-verbose_json-style segment; both Groq and whisper.cpp variants fit. */
+export interface Segment {
+  avg_logprob?: number;
+  start?: number;
+  end?: number;
+}
+
+/** Duration-weighted mean of exp(avg_logprob), clamped to [0, 1]. Null when the
+ *  backend gave us nothing to judge by — the echo logic then stays quiet. */
+export function deriveConfidence(segments: Segment[] | undefined): number | null {
+  if (!segments?.length) return null;
+  let weighted = 0;
+  let total = 0;
+  for (const s of segments) {
+    if (typeof s.avg_logprob !== "number") continue;
+    const dur = Math.max((s.end ?? 0) - (s.start ?? 0), 0.01);
+    weighted += Math.exp(s.avg_logprob) * dur;
+    total += dur;
+  }
+  if (total === 0) return null;
+  return Math.min(1, Math.max(0, weighted / total));
+}
+
+/** Contract for the local backend: stdout is one JSON object,
+ *  {"text": string, "confidence"?: number 0..1}. Anything else throws. */
+export function parseLocalOutput(stdout: string): Transcript {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(`local transcriber printed non-JSON: ${stdout.slice(0, 120)}`);
+  }
+  if (typeof parsed?.text !== "string") {
+    throw new Error("local transcriber JSON has no text field");
+  }
+  const c = parsed.confidence;
+  const confidence =
+    typeof c === "number" && Number.isFinite(c) ? Math.min(1, Math.max(0, c)) : null;
+  return { text: parsed.text.trim(), confidence };
+}

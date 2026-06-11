@@ -3,6 +3,8 @@ import {
   envNum,
   resolveBackend,
   shouldEchoTranscript,
+  deriveConfidence,
+  parseLocalOutput,
 } from "./transcribe";
 
 // --- envNum: numeric env parsing that survives empty strings ------------------
@@ -70,4 +72,63 @@ test("shouldEchoTranscript never echoes when confidence is unknown", () => {
 test("shouldEchoTranscript with threshold 0 disables the echo entirely", () => {
   expect(shouldEchoTranscript(0.0001, 0)).toBe(false);
   expect(shouldEchoTranscript(0, 0)).toBe(false);
+});
+
+// --- deriveConfidence: duration-weighted mean of exp(avg_logprob) -------------
+
+test("deriveConfidence is null for missing or empty segments", () => {
+  expect(deriveConfidence(undefined)).toBeNull();
+  expect(deriveConfidence([])).toBeNull();
+});
+
+test("deriveConfidence is null when no segment has avg_logprob", () => {
+  expect(deriveConfidence([{ start: 0, end: 2 }])).toBeNull();
+});
+
+test("deriveConfidence on one segment is exp(avg_logprob)", () => {
+  const c = deriveConfidence([{ avg_logprob: Math.log(0.8), start: 0, end: 2 }]);
+  expect(c).toBeCloseTo(0.8, 5);
+});
+
+test("deriveConfidence weights segments by duration", () => {
+  // 1s at 0.9 and 3s at 0.5 → (0.9*1 + 0.5*3) / 4 = 0.6
+  const c = deriveConfidence([
+    { avg_logprob: Math.log(0.9), start: 0, end: 1 },
+    { avg_logprob: Math.log(0.5), start: 1, end: 4 },
+  ]);
+  expect(c).toBeCloseTo(0.6, 5);
+});
+
+test("deriveConfidence clamps into [0, 1] and survives missing start/end", () => {
+  const c = deriveConfidence([{ avg_logprob: 0.5 }]); // exp(0.5) ≈ 1.65 → clamp 1
+  expect(c).toBe(1);
+});
+
+// --- parseLocalOutput: the local-command JSON contract -------------------------
+
+test("parseLocalOutput parses text and clamps confidence", () => {
+  expect(parseLocalOutput('{"text": " שלום ", "confidence": 0.7}')).toEqual({
+    text: "שלום",
+    confidence: 0.7,
+  });
+  expect(parseLocalOutput('{"text": "hi", "confidence": 7}')).toEqual({
+    text: "hi",
+    confidence: 1,
+  });
+});
+
+test("parseLocalOutput defaults a missing or junk confidence to null", () => {
+  expect(parseLocalOutput('{"text": "hi"}')).toEqual({ text: "hi", confidence: null });
+  expect(parseLocalOutput('{"text": "hi", "confidence": "high"}')).toEqual({
+    text: "hi",
+    confidence: null,
+  });
+});
+
+test("parseLocalOutput throws on non-JSON stdout", () => {
+  expect(() => parseLocalOutput("whisper: command not found")).toThrow(/non-JSON/);
+});
+
+test("parseLocalOutput throws when the text field is missing", () => {
+  expect(() => parseLocalOutput('{"transcript": "hi"}')).toThrow(/no text field/);
 });

@@ -4,6 +4,10 @@ A 24/7 personal AI assistant on Telegram, powered by the local `claude` CLI
 (Claude Pro subscription — no API key). Each message spawns a fresh
 `claude -p` process with your conversation history as context.
 
+## Features
+
+- Voice notes: speak instead of typing — transcribed (Groq whisper, swappable local backend) and answered like text, with a 🎤 transcript echo when confidence is low.
+
 ## How it works
 
 `poller.ts` (Bun) long-polls Telegram. For each text message from an

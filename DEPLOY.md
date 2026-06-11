@@ -135,6 +135,50 @@ chmod 600 /home/claudebot/.claude/channels/telegram/.env
 
 ---
 
+## Step 7b — Voice notes (optional but recommended)
+
+Voice bubbles are transcribed before Claude sees them (`transcribe.ts`).
+Without configuration the bot politely says voice isn't connected yet —
+nothing breaks.
+
+**Hosted backend (default, recommended on a 1 GB droplet):**
+
+1. Create a free API key at https://console.groq.com (no card required).
+2. Append it to the bot env file:
+
+   ```bash
+   echo 'GROQ_API_KEY=gsk_...' >> /home/claudebot/.claude/channels/telegram/.env
+   ```
+
+3. Restart the poller (tmux `bot` window → Ctrl-C → `./start.sh`). Done —
+   `TRANSCRIBE_BACKEND` auto-resolves to `groq` when the key is present.
+
+Tuning (all optional, in the same `.env`):
+
+| var | default | meaning |
+|---|---|---|
+| `TRANSCRIBE_BACKEND` | auto | `groq` / `local` / `off` (explicit override) |
+| `GROQ_STT_MODEL` | `whisper-large-v3-turbo` | hosted whisper variant |
+| `VOICE_MAX_SEC` | `300` | longest voice note accepted |
+| `VOICE_ECHO_BELOW` | `0.6` | echo the transcript when confidence is below this; `0` = never echo |
+| `VOICE_TIMEOUT_MS` | `45000` | transcription timeout |
+
+**Local backend (keyless, deferred — for a bigger droplet someday):**
+
+`TRANSCRIBE_CMD` is a shell command template; `{input}` is replaced with the
+quoted audio path, and stdout must be `{"text": "...", "confidence": 0..1?}`
+JSON. Example with whisper.cpp (UNVERIFIED — validate when you provision it;
+the 1 GB droplet can only hold the `small` model, whose Hebrew is mediocre):
+
+```bash
+# one-time: apt install -y ffmpeg jq; build whisper.cpp; download a quantized model
+TRANSCRIBE_CMD='wav=$(mktemp --suffix .wav); ffmpeg -y -loglevel error -i {input} -ar 16000 -ac 1 "$wav" && /home/claudebot/whisper.cpp/build/bin/whisper-cli -m /home/claudebot/whisper.cpp/models/ggml-small-q5_1.bin -l auto -np -nt -oj -of "${wav%.wav}" "$wav" >/dev/null && jq -c "{text: ([.transcription[].text] | join(\"\")), confidence: null}" "${wav%.wav}.json"; rm -f "$wav" "${wav%.wav}.json"'
+```
+
+A swap file is strongly advised before trying local inference on the 1 GB box.
+
+---
+
 ## Step 8 — Create the real allowlist (server)
 
 ```bash

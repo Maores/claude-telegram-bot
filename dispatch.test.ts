@@ -79,6 +79,22 @@ test("drop() skips queued-but-unstarted jobs, not the running one; queue stays u
   q.enqueue(9, async () => { ran.push("post-drop"); });
   await tick(); await tick();
   expect(ran).toEqual(["running", "post-drop"]);
+  await tick();
+  expect(q.pending(9)).toBe(0); // counter is cleared by drop and never goes negative
+});
+
+test("a second drop() before the chain drains reports 0, not the same jobs again", async () => {
+  const q = new ChatQueues();
+  const g = gate();
+  q.enqueue(4, async () => { await g.p; });
+  q.enqueue(4, async () => {});
+  q.enqueue(4, async () => {});
+  await tick();
+  expect(q.drop(4)).toBe(2);
+  expect(q.drop(4)).toBe(0); // rapid double-/stop must not double-count
+  g.open();
+  await tick(); await tick();
+  expect(q.pending(4)).toBe(0);
 });
 
 test("SerialChain runs jobs one at a time, surviving errors", async () => {

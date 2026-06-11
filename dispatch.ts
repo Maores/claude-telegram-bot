@@ -52,7 +52,7 @@ export class ChatQueues {
     const next = tail
       .then(async () => {
         // Reached the head of the queue: no longer "queued".
-        this.queued.set(chatId, (this.queued.get(chatId) ?? 1) - 1);
+        this.queued.set(chatId, Math.max(0, (this.queued.get(chatId) ?? 0) - 1));
         if ((this.epochs.get(chatId) ?? 0) !== epoch) return; // dropped by /stop
         await job();
       })
@@ -63,6 +63,7 @@ export class ChatQueues {
   /** Invalidate every queued-but-unstarted job for the chat. Returns how many. */
   drop(chatId: number): number {
     const n = this.queued.get(chatId) ?? 0;
+    this.queued.set(chatId, 0); // eager: a second /stop must not re-count the same doomed jobs
     this.epochs.set(chatId, (this.epochs.get(chatId) ?? 0) + 1);
     return n;
   }
@@ -75,7 +76,10 @@ export class ChatQueues {
 
 /** One global FIFO for callback queries: each handler ACKs in <1 s, and
  *  serializing them keeps followups.json single-writer within this process
- *  (two rapid button taps can no longer interleave their read-modify-write). */
+ *  (two rapid button taps can no longer interleave their read-modify-write).
+ *  Jobs are expected to finish in <1-2s (ACK + a couple of edits); a job that
+ *  hangs (e.g. Telegram 429 with a long retry_after) stalls the chain — add a
+ *  per-job timeout if that ever proves real. */
 export class SerialChain {
   private tail: Promise<void> = Promise.resolve();
   enqueue(job: () => Promise<void>): void {

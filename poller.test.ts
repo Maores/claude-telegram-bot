@@ -16,6 +16,9 @@ import {
   fuKeyboard,
   snoozeKeyboard,
   snoozeTarget,
+  voiceInfo,
+  voicePromptText,
+  voiceHistoryNote,
 } from "./poller.ts";
 
 test("short text stays one chunk", () => {
@@ -135,10 +138,10 @@ test("unsupportedMediaKind labels a video", () => {
   expect(unsupportedMediaKind({ message_id: 1, chat: { id: 1 }, video: { file_id: "v" } })).toBe("a video");
 });
 
-test("unsupportedMediaKind labels a voice message", () => {
-  expect(unsupportedMediaKind({ message_id: 1, chat: { id: 1 }, voice: { file_id: "v" } })).toBe(
-    "a voice message",
-  );
+test("unsupportedMediaKind no longer labels voice — phase 6 reads it", () => {
+  expect(
+    unsupportedMediaKind({ message_id: 1, chat: { id: 1 }, voice: { file_id: "v", duration: 3 } }),
+  ).toBeNull();
 });
 
 test("unsupportedMediaKind returns null for a plain text message", () => {
@@ -302,4 +305,37 @@ test("snoozeTarget seve fallback is constructor-based (DST-safe), still 20:00 ne
   const night = Math.floor(new Date(2027, 2, 25, 21, 30, 0).getTime() / 1000);
   const eve = new Date(snoozeTarget("seve", night) * 1000);
   expect([eve.getDate(), eve.getHours(), eve.getMinutes()]).toEqual([26, 20, 0]);
+});
+
+// --- voiceInfo: describe a voice bubble without downloading (phase 6) ---------
+
+test("voiceInfo returns null when there is no voice", () => {
+  expect(voiceInfo({ message_id: 1, chat: { id: 1 }, text: "hi" })).toBeNull();
+});
+
+test("voiceInfo extracts file id, duration, and size", () => {
+  const info = voiceInfo({
+    message_id: 1,
+    chat: { id: 1 },
+    voice: { file_id: "v9", duration: 42, mime_type: "audio/ogg", file_size: 130_000 },
+  });
+  expect(info).toEqual({ fileId: "v9", duration: 42, size: 130_000 });
+});
+
+test("voiceInfo defaults a missing duration to 0", () => {
+  const info = voiceInfo({ message_id: 1, chat: { id: 1 }, voice: { file_id: "v" } as any });
+  expect(info?.duration).toBe(0);
+});
+
+// --- voice prompt/history wrappers ---------------------------------------------
+
+test("voicePromptText marks the medium so Claude reads mishearings charitably", () => {
+  const p = voicePromptText("תקבע לי תור לרופא");
+  expect(p).toContain("voice note");
+  expect(p).toContain("transcript");
+  expect(p.endsWith("תקבע לי תור לרופא")).toBe(true);
+});
+
+test("voiceHistoryNote stores a compact searchable marker", () => {
+  expect(voiceHistoryNote("call the bank")).toBe("[voice] call the bank");
 });

@@ -82,6 +82,12 @@ interface TgFile {
   file_name?: string;
   file_size?: number;
 }
+interface TgVoice {
+  file_id: string;
+  duration: number;
+  mime_type?: string;
+  file_size?: number;
+}
 interface TgMessage {
   message_id: number;
   chat: { id: number };
@@ -90,10 +96,10 @@ interface TgMessage {
   caption?: string;
   photo?: TgPhotoSize[];
   document?: TgDocument;
+  voice?: TgVoice;
   // Media we recognize but can't open yet — used only to decline honestly.
   video?: TgFile;
   video_note?: TgFile;
-  voice?: TgFile;
   audio?: TgFile;
   animation?: TgFile;
   sticker?: TgFile;
@@ -373,11 +379,23 @@ export function attachmentInfo(
 export function unsupportedMediaKind(msg: TgMessage): string | null {
   if (msg.video) return "a video";
   if (msg.video_note) return "a video note";
-  if (msg.voice) return "a voice message";
   if (msg.audio) return "an audio file";
   if (msg.animation) return "a GIF";
   if (msg.sticker) return "a sticker";
   return null;
+}
+
+/** Describe a voice bubble (file id, duration, size) WITHOUT downloading it,
+ *  so the caller can gate on duration/size first. Null when not a voice msg. */
+export function voiceInfo(
+  msg: TgMessage,
+): { fileId: string; duration: number; size?: number } | null {
+  if (!msg.voice) return null;
+  return {
+    fileId: msg.voice.file_id,
+    duration: msg.voice.duration ?? 0,
+    size: msg.voice.file_size,
+  };
 }
 
 /** Download a Telegram file by file_id into ./uploads and return its local path. */
@@ -486,6 +504,17 @@ export function buildPrompt(
   }
   lines.push(`New message from ${name}:`, text);
   return lines.join("\n");
+}
+
+/** What Claude sees for a voice note: the medium is named so it can read
+ *  obvious mishearings charitably; the transcript stays the user's words. */
+export function voicePromptText(transcript: string): string {
+  return `[The user sent a voice note; this is its transcript — answer it like a typed message.]\n${transcript}`;
+}
+
+/** What history/recall stores for a voice note (file is transient). */
+export function voiceHistoryNote(transcript: string): string {
+  return `[voice] ${transcript}`;
 }
 
 // ---------------------------------------------------------------------------

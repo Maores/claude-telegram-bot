@@ -16,7 +16,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import { popDue } from "./reminders.ts";
+import { popDue, addOnce, addFollowup, getFollowup, resolveFollowup, rebindFollowup, markNudged, dueNudges, pruneFollowups, fmt } from "./reminders.ts";
 import { StreamParser, displayText } from "./stream.ts";
 import { pickModel } from "./model.ts";
 import { upcomingEvents, nudgeKey, loadNotified, saveNotified, pruneNotified } from "./calendar.ts";
@@ -100,6 +100,12 @@ interface TgMessage {
 interface TgUpdate {
   update_id: number;
   message?: TgMessage;
+  callback_query?: {
+    id: string;
+    from: { id: number };
+    message?: { message_id: number; chat: { id: number }; text?: string };
+    data?: string;
+  };
 }
 interface HistoryItem {
   role: "user" | "assistant";
@@ -787,6 +793,46 @@ async function handleMessage(msg: TgMessage) {
   }
 }
 
+/** Inline-button presses. ACK fast, allowlist-check, then route by namespace. */
+async function handleCallback(cq: NonNullable<TgUpdate["callback_query"]>) {
+  // Always ACK — otherwise Telegram shows a spinner on the button for minutes.
+  await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+  if (!loadAllowList().has(String(cq.from.id))) return;
+  const chatId = cq.message?.chat.id;
+  const messageId = cq.message?.message_id;
+  const parsed = parseFuCallback(cq.data ?? "");
+  if (!parsed || chatId == null || messageId == null) return; // unknown namespace — ignore
+
+  const nowS = Math.floor(Date.now() / 1000);
+  if (parsed.action === "done") {
+    const f = resolveFollowup(parsed.id, "done");
+    if (!f) return; // already resolved — the ACK is enough
+    await tg("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text: `${cq.message?.text ?? `⏰ ${f.text}`} — ✓ בוצע`,
+    }).catch(() => {});
+  } else if (parsed.action === "later") {
+    if (getFollowup(parsed.id)?.status !== "pending") return;
+    await tg("editMessageReplyMarkup", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: snoozeKeyboard(parsed.id),
+    }).catch(() => {});
+  } else {
+    const f = resolveFollowup(parsed.id, "snoozed");
+    if (!f) return;
+    const t = snoozeTarget(parsed.action, nowS);
+    addOnce(f.chatId, t, f.text);
+    await tg("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text: `${cq.message?.text ?? `⏰ ${f.text}`} — נדחה ל־${fmt(t)}`,
+    }).catch(() => {});
+    console.log(`[REMIND] snoozed fu ${f.id} to ${fmt(t)}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Offset persistence (so restarts don't drop or replay messages)
 // ---------------------------------------------------------------------------
@@ -838,12 +884,41 @@ async function checkReminders() {
         // Unattended run → least-privilege: can't schedule reminders or file drafts.
         await streamClaude(fullPrompt, r.chatId, ph.message_id, "sonnet", autoSessionSpawn());
       } else {
-        await tg("sendMessage", { chat_id: r.chatId, text: `⏰ Reminder: ${r.text}` });
+        if (r.repeat) {
+          await tg("sendMessage", { chat_id: r.chatId, text: `⏰ Reminder: ${r.text}` });
+        } else {
+          // One-time task reminders carry done/snooze buttons (follow-up loop).
+          const fu = addFollowup(r.chatId, r.text, 0, Math.floor(Date.now() / 1000));
+          const sent = await tg("sendMessage", {
+            chat_id: r.chatId,
+            text: `⏰ Reminder: ${r.text}`,
+            reply_markup: fuKeyboard(fu.id),
+          });
+          rebindFollowup(fu.id, sent.message_id);
+        }
       }
       console.log(redact(`[REMIND] fired ${r.id} -> ${r.chatId}: ${r.text}`));
     } catch (e: any) {
       console.error(`[ERR] send reminder ${r.id}: ${e?.message ?? e}`);
     }
+  }
+
+  // One gentle nudge for follow-ups ignored for an hour; prune old resolved ones.
+  try {
+    const nowS = Math.floor(Date.now() / 1000);
+    for (const f of dueNudges(nowS)) {
+      const sent = await tg("sendMessage", {
+        chat_id: f.chatId,
+        text: `עדיין רלוונטי? ⏰ ${f.text}`,
+        reply_markup: fuKeyboard(f.id),
+      });
+      markNudged(f.id);
+      rebindFollowup(f.id, sent.message_id);
+      console.log(`[REMIND] nudged ${f.id} -> ${f.chatId}`);
+    }
+    pruneFollowups(nowS);
+  } catch (e: any) {
+    console.error(`[ERR] nudges: ${e?.message ?? e}`);
   }
 }
 
@@ -945,6 +1020,12 @@ async function main() {
           await handleMessage(u.message);
         } catch (e: any) {
           console.error(`[ERR] unhandled: ${e?.message ?? e}`);
+        }
+      } else if (u.callback_query) {
+        try {
+          await handleCallback(u.callback_query);
+        } catch (e: any) {
+          console.error(`[ERR] callback: ${e?.message ?? e}`);
         }
       }
     }

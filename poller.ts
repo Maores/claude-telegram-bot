@@ -776,6 +776,9 @@ async function handleMessage(msg: TgMessage) {
       const tr = await transcribeVoice(audioPath);
       voiceText = tr.text;
       voiceConfidence = tr.confidence;
+      // Confidence in the journal (transcript itself logs later via [MSG]) —
+      // this is what VOICE_ECHO_BELOW gets calibrated against with real notes.
+      console.log(`[VOICE] confidence=${tr.confidence?.toFixed(3) ?? "n/a"} chars=${tr.text.length}`);
     } catch (e: any) {
       console.error(`[ERR] transcribe voice from ${fromId}: ${e?.message ?? e}`);
       void setReaction(chatId, msg.message_id, outcomeReaction(false));

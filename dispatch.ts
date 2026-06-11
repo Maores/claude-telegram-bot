@@ -35,3 +35,52 @@ export function classifyUpdate(u: DispatchUpdate, botUsername: string): UpdateKi
   if (u.message) return isStopCommand(u.message.text ?? "", botUsername) ? "stop" : "message";
   return "ignore";
 }
+
+/** Per-chat FIFO of message turns: strict order within a chat, chats
+ *  independent, one thrown job never breaks the chain. drop() (the /stop
+ *  path) invalidates queued-but-unstarted jobs via an epoch bump — the
+ *  running job is stopChild's problem, not ours. */
+export class ChatQueues {
+  private tails = new Map<number, Promise<void>>();
+  private epochs = new Map<number, number>();
+  private queued = new Map<number, number>();
+
+  enqueue(chatId: number, job: () => Promise<void>): void {
+    const epoch = this.epochs.get(chatId) ?? 0;
+    this.queued.set(chatId, (this.queued.get(chatId) ?? 0) + 1);
+    const tail = this.tails.get(chatId) ?? Promise.resolve();
+    const next = tail
+      .then(async () => {
+        // Reached the head of the queue: no longer "queued".
+        this.queued.set(chatId, (this.queued.get(chatId) ?? 1) - 1);
+        if ((this.epochs.get(chatId) ?? 0) !== epoch) return; // dropped by /stop
+        await job();
+      })
+      .catch((e: any) => console.error(`[ERR] queued turn (chat ${chatId}): ${e?.message ?? e}`));
+    this.tails.set(chatId, next);
+  }
+
+  /** Invalidate every queued-but-unstarted job for the chat. Returns how many. */
+  drop(chatId: number): number {
+    const n = this.queued.get(chatId) ?? 0;
+    this.epochs.set(chatId, (this.epochs.get(chatId) ?? 0) + 1);
+    return n;
+  }
+
+  /** Queued-but-unstarted turns for a chat (observability + tests). */
+  pending(chatId: number): number {
+    return this.queued.get(chatId) ?? 0;
+  }
+}
+
+/** One global FIFO for callback queries: each handler ACKs in <1 s, and
+ *  serializing them keeps followups.json single-writer within this process
+ *  (two rapid button taps can no longer interleave their read-modify-write). */
+export class SerialChain {
+  private tail: Promise<void> = Promise.resolve();
+  enqueue(job: () => Promise<void>): void {
+    this.tail = this.tail
+      .then(job)
+      .catch((e: any) => console.error(`[ERR] callback chain: ${e?.message ?? e}`));
+  }
+}

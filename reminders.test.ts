@@ -1,6 +1,7 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 // Use a throwaway store file so tests never touch the real reminders.json.
 const TMP = join(import.meta.dir, "reminders.test.tmp.json");
@@ -115,4 +116,66 @@ test("popDue leaves future reminders untouched", () => {
   addOnce(7, future, "later");
   expect(popDue().length).toBe(0);
   expect(loadStore().length).toBe(1);
+});
+
+// --- follow-up lifecycle (Phase 5) ----------------------------------------
+
+import {
+  addFollowup, getFollowup, resolveFollowup, rebindFollowup,
+  markNudged, dueNudges, pruneFollowups, loadFollowups, type Followup,
+} from "./reminders.ts";
+
+const T0 = 1_781_000_000;
+
+function freshFollowupFile() {
+  process.env.FOLLOWUPS_FILE = join(mkdtempSync(join(tmpdir(), "fu-")), "followups.json");
+}
+
+test("addFollowup creates a pending, un-nudged follow-up with a fresh id", () => {
+  freshFollowupFile();
+  const f = addFollowup(282408422, "לקנות חלב", 111, T0);
+  expect(f.status).toBe("pending");
+  expect(f.nudged).toBe(false);
+  expect(f.messageId).toBe(111);
+  const again = addFollowup(282408422, "משהו אחר", 112, T0);
+  expect(again.id).not.toBe(f.id);
+  expect(loadFollowups().length).toBe(2);
+});
+
+test("resolveFollowup marks done/snoozed once; second resolve returns null", () => {
+  freshFollowupFile();
+  const f = addFollowup(1, "x", 5, T0);
+  expect(resolveFollowup(f.id, "done")!.status).toBe("done");
+  expect(resolveFollowup(f.id, "snoozed")).toBeNull(); // already resolved
+  expect(getFollowup(f.id)!.status).toBe("done");
+});
+
+test("dueNudges returns pending follow-ups older than the age, once only", () => {
+  freshFollowupFile();
+  const f = addFollowup(1, "x", 5, T0);
+  expect(dueNudges(T0 + 3599).length).toBe(0); // not old enough
+  const due = dueNudges(T0 + 3600);
+  expect(due.map((d) => d.id)).toEqual([f.id]);
+  markNudged(f.id);
+  expect(dueNudges(T0 + 7200).length).toBe(0); // never twice
+});
+
+test("resolved follow-ups never nudge; rebind moves the buttons' message", () => {
+  freshFollowupFile();
+  const f = addFollowup(1, "x", 5, T0);
+  rebindFollowup(f.id, 99);
+  expect(getFollowup(f.id)!.messageId).toBe(99);
+  resolveFollowup(f.id, "snoozed");
+  expect(dueNudges(T0 + 9999).length).toBe(0);
+});
+
+test("pruneFollowups drops resolved entries older than 7 days, keeps pending", () => {
+  freshFollowupFile();
+  const a = addFollowup(1, "old done", 1, T0 - 8 * 86_400);
+  const b = addFollowup(1, "old pending", 2, T0 - 8 * 86_400);
+  resolveFollowup(a.id, "done");
+  const removed = pruneFollowups(T0);
+  expect(removed).toBe(1);
+  expect(getFollowup(a.id)).toBeNull();
+  expect(getFollowup(b.id)!.status).toBe("pending");
 });

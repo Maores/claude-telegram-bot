@@ -129,3 +129,100 @@ export function fmt(epoch: number): string {
   const d = new Date(epoch * 1000);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+// ---------------------------------------------------------------------------
+// Reminder follow-ups (Phase 5): "did you actually do it?" lifecycle.
+// Stored in a sibling followups.json (the reminders store is a bare array on
+// live disk; reshaping it buys nothing). Same atomic-write pattern.
+// ---------------------------------------------------------------------------
+
+export type FollowupStatus = "pending" | "done" | "snoozed";
+export interface Followup {
+  id: string;
+  chatId: number;
+  text: string; // the reminder text the buttons refer to
+  messageId: number; // the message currently carrying the buttons
+  firedAt: number; // epoch seconds the reminder fired
+  status: FollowupStatus;
+  nudged: boolean; // one nudge max, ever
+}
+
+const NUDGE_AFTER_S = 3600;
+const PRUNE_AFTER_S = 7 * 86_400;
+
+function followupsPath(): string {
+  return process.env.FOLLOWUPS_FILE ?? join(import.meta.dir, "followups.json");
+}
+
+export function loadFollowups(): Followup[] {
+  try {
+    const data = JSON.parse(readFileSync(followupsPath(), "utf8"));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveFollowups(list: Followup[]) {
+  const path = followupsPath();
+  const tmp = path + ".tmp";
+  writeFileSync(tmp, JSON.stringify(list, null, 2));
+  renameSync(tmp, path);
+}
+
+export function addFollowup(chatId: number, text: string, messageId: number, firedAt: number): Followup {
+  const list = loadFollowups();
+  const ids = new Set(list.map((f) => f.id));
+  let n = 1;
+  while (ids.has("f" + n)) n++;
+  const f: Followup = { id: "f" + n, chatId, text, messageId, firedAt, status: "pending", nudged: false };
+  list.push(f);
+  saveFollowups(list);
+  return f;
+}
+
+export function getFollowup(id: string): Followup | null {
+  return loadFollowups().find((f) => f.id === id) ?? null;
+}
+
+/** pending → done/snoozed exactly once; returns null if missing or resolved. */
+export function resolveFollowup(id: string, status: "done" | "snoozed"): Followup | null {
+  const list = loadFollowups();
+  const f = list.find((x) => x.id === id);
+  if (!f || f.status !== "pending") return null;
+  f.status = status;
+  saveFollowups(list);
+  return f;
+}
+
+/** Point the follow-up at a new message (the nudge takes over the buttons). */
+export function rebindFollowup(id: string, newMessageId: number) {
+  const list = loadFollowups();
+  const f = list.find((x) => x.id === id);
+  if (!f) return;
+  f.messageId = newMessageId;
+  saveFollowups(list);
+}
+
+export function markNudged(id: string) {
+  const list = loadFollowups();
+  const f = list.find((x) => x.id === id);
+  if (!f) return;
+  f.nudged = true;
+  saveFollowups(list);
+}
+
+/** Pending, never-nudged follow-ups whose reminder fired >= age ago. */
+export function dueNudges(nowEpoch: number, ageSec = NUDGE_AFTER_S): Followup[] {
+  return loadFollowups().filter(
+    (f) => f.status === "pending" && !f.nudged && f.firedAt + ageSec <= nowEpoch,
+  );
+}
+
+/** Drop RESOLVED follow-ups older than 7 days. Returns how many were removed. */
+export function pruneFollowups(nowEpoch: number): number {
+  const list = loadFollowups();
+  const keep = list.filter((f) => f.status === "pending" || f.firedAt > nowEpoch - PRUNE_AFTER_S);
+  if (keep.length !== list.length) saveFollowups(keep);
+  return list.length - keep.length;
+}

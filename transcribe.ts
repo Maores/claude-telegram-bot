@@ -13,6 +13,8 @@
  * transcript back to Maor only when confidence is below VOICE_ECHO_BELOW.
  */
 
+import { basename } from "node:path";
+
 export interface Transcript {
   text: string;
   confidence: number | null;
@@ -93,4 +95,58 @@ export function parseLocalOutput(stdout: string): Transcript {
   const confidence =
     typeof c === "number" && Number.isFinite(c) ? Math.min(1, Math.max(0, c)) : null;
   return { text: parsed.text.trim(), confidence };
+}
+
+const GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
+export const GROQ_STT_MODEL = process.env.GROQ_STT_MODEL || "whisper-large-v3-turbo";
+
+/** One multipart POST to Groq's OpenAI-compatible transcription endpoint.
+ *  The Telegram .oga (ogg/opus) uploads as-is — no ffmpeg on this path.
+ *  Retries exactly once on network errors and 5xx; 4xx is the caller's
+ *  problem (bad key, rate limit) and surfaces immediately. */
+export async function groqTranscribe(
+  path: string,
+  opts: {
+    apiKey?: string;
+    model?: string;
+    timeoutMs?: number;
+    fetchFn?: typeof fetch;
+  } = {},
+): Promise<Transcript> {
+  const apiKey = opts.apiKey ?? process.env.GROQ_API_KEY ?? "";
+  if (!apiKey) throw new Error("GROQ_API_KEY is not set");
+  const fetchFn = opts.fetchFn ?? fetch;
+  const timeoutMs = opts.timeoutMs ?? VOICE_TIMEOUT_MS;
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // Rebuilt per attempt — a FormData body may not be reusable after a send.
+    const form = new FormData();
+    form.append("file", Bun.file(path), basename(path) || "voice.oga");
+    form.append("model", opts.model ?? GROQ_STT_MODEL);
+    form.append("response_format", "verbose_json");
+    try {
+      const res = await fetchFn(GROQ_STT_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}` },
+        body: form,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.status >= 500) {
+        lastErr = new Error(`groq HTTP ${res.status}`);
+        continue; // retry once on server errors
+      }
+      if (!res.ok) {
+        throw new Error(`groq HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      }
+      const data: any = await res.json();
+      if (typeof data?.text !== "string") throw new Error("groq response has no text field");
+      return { text: data.text.trim(), confidence: deriveConfidence(data.segments) };
+    } catch (e: any) {
+      // 4xx and malformed-body errors are final; network/abort errors retry once.
+      if (e instanceof Error && /groq HTTP 4\d\d|no text field/.test(e.message)) throw e;
+      lastErr = e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }

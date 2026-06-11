@@ -5,6 +5,7 @@ import {
   shouldEchoTranscript,
   deriveConfidence,
   parseLocalOutput,
+  groqTranscribe,
 } from "./transcribe";
 
 // --- envNum: numeric env parsing that survives empty strings ------------------
@@ -135,4 +136,91 @@ test("parseLocalOutput throws on non-JSON stdout", () => {
 
 test("parseLocalOutput throws when the text field is missing", () => {
   expect(() => parseLocalOutput('{"transcript": "hi"}')).toThrow(/no text field/);
+});
+
+// --- groqTranscribe: hosted whisper via OpenAI-compatible endpoint ------------
+// fetchFn is injected; no network. The audio file itself is never read by the
+// fake, so a nonexistent path is fine (Bun.file is lazy).
+
+function groqOk(body: unknown): Response {
+  return new Response(JSON.stringify(body), { status: 200 });
+}
+
+test("groqTranscribe sends auth, model, verbose_json — and parses the reply", async () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const fetchFn = (async (url: any, init: any) => {
+    calls.push({ url: String(url), init });
+    return groqOk({
+      text: " תזכיר לי מחר ",
+      segments: [{ avg_logprob: Math.log(0.9), start: 0, end: 2 }],
+    });
+  }) as typeof fetch;
+
+  const tr = await groqTranscribe("uploads/none.oga", { apiKey: "gsk_test", fetchFn });
+  expect(tr.text).toBe("תזכיר לי מחר");
+  expect(tr.confidence).toBeCloseTo(0.9, 5);
+
+  expect(calls.length).toBe(1);
+  expect(calls[0].url).toBe("https://api.groq.com/openai/v1/audio/transcriptions");
+  expect((calls[0].init.headers as any).authorization).toBe("Bearer gsk_test");
+  const form = calls[0].init.body as FormData;
+  expect(form.get("model")).toBe("whisper-large-v3-turbo");
+  expect(form.get("response_format")).toBe("verbose_json");
+  expect(form.get("file")).not.toBeNull();
+});
+
+test("groqTranscribe yields null confidence when segments are absent", async () => {
+  const fetchFn = (async () => groqOk({ text: "hi" })) as typeof fetch;
+  const tr = await groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn });
+  expect(tr).toEqual({ text: "hi", confidence: null });
+});
+
+test("groqTranscribe retries once on a 5xx and then succeeds", async () => {
+  let n = 0;
+  const fetchFn = (async () => {
+    n++;
+    if (n === 1) return new Response("boom", { status: 500 });
+    return groqOk({ text: "ok" });
+  }) as typeof fetch;
+  const tr = await groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn });
+  expect(tr.text).toBe("ok");
+  expect(n).toBe(2);
+});
+
+test("groqTranscribe does NOT retry a 4xx (e.g. 429) and throws with the status", async () => {
+  let n = 0;
+  const fetchFn = (async () => {
+    n++;
+    return new Response('{"error": "rate limit"}', { status: 429 });
+  }) as typeof fetch;
+  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+    /groq HTTP 429/,
+  );
+  expect(n).toBe(1);
+});
+
+test("groqTranscribe retries once on a network error, then surfaces it", async () => {
+  let n = 0;
+  const fetchFn = (async () => {
+    n++;
+    throw new Error("connect ECONNREFUSED");
+  }) as typeof fetch;
+  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+    /ECONNREFUSED/,
+  );
+  expect(n).toBe(2);
+});
+
+test("groqTranscribe throws without an api key", async () => {
+  const fetchFn = (async () => groqOk({ text: "x" })) as typeof fetch;
+  await expect(
+    groqTranscribe("uploads/none.oga", { apiKey: "", fetchFn }),
+  ).rejects.toThrow(/GROQ_API_KEY/);
+});
+
+test("groqTranscribe throws on a 200 whose body has no text field", async () => {
+  const fetchFn = (async () => groqOk({ uh: "oh" })) as typeof fetch;
+  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+    /no text field/,
+  );
 });

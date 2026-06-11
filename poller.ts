@@ -810,11 +810,12 @@ async function handleMessage(msg: TgMessage) {
     }
   }
 
-  // Media we recognize but can't open (video, voice, audio, GIF, sticker, …).
+  // Media we recognize but can't open (video, audio, GIF, sticker, …).
   const unsupported = attachment ? null : unsupportedMediaKind(msg);
 
-  // Nothing readable and nothing said → polite, specific decline.
-  if (!attachment && !words) {
+  // Nothing readable and nothing said → polite, specific decline. A transcribed
+  // voice note has empty `words` but IS the message — it must not land here.
+  if (!attachment && !words && voiceText === null) {
     const text = unsupported
       ? `I can't open ${unsupported} yet — I can read text, images, documents (PDFs, etc.), and voice notes.`
       : "I can read text, images, documents (PDFs, etc.), and voice notes right now — but not this kind of message yet.";

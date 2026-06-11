@@ -1074,6 +1074,24 @@ Four surgical edits in the rest of `handleMessage`:
       )).trim() || "(no output)";
 ```
 
+(f) The "nothing readable and nothing said" decline guard must not swallow a
+successful transcription (voice messages have empty `words` and a null
+`attachment`, but the transcript IS the message). Change:
+
+```ts
+  if (!attachment && !words) {
+```
+
+to:
+
+```ts
+  if (!attachment && !words && voiceText === null) {
+```
+
+(This edit was missing from the original plan and was caught by the Task 8
+spec review trace — without it every transcribed voice note fell into the
+decline reply and the transcript was discarded.)
+
 - [ ] **Step 8.4: Update the honest-decline copy and the file header**
 
 (a) In the `!attachment && !words` decline (text-only fallback messages around line 714-717), update both strings:

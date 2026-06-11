@@ -296,3 +296,10 @@ test("snoozeTarget: +1h, evening-rolls-to-tomorrow, tomorrow-morning", () => {
   const tom = new Date(snoozeTarget("stom", night) * 1000);
   expect([tom.getDate(), tom.getHours()]).toEqual([12, 9]);
 });
+
+test("snoozeTarget seve fallback is constructor-based (DST-safe), still 20:00 next day", () => {
+  // 21:30 on some day — fallback path; assert the result is exactly 20:00 local next day
+  const night = Math.floor(new Date(2027, 2, 25, 21, 30, 0).getTime() / 1000);
+  const eve = new Date(snoozeTarget("seve", night) * 1000);
+  expect([eve.getDate(), eve.getHours(), eve.getMinutes()]).toEqual([26, 20, 0]);
+});

@@ -258,7 +258,9 @@ export function snoozeTarget(action: "s1h" | "seve" | "stom", nowEpoch: number):
   if (action === "seve") {
     const eve = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 20, 0, 0, 0);
     const t = Math.floor(eve.getTime() / 1000);
-    return t > nowEpoch ? t : t + 86_400;
+    if (t > nowEpoch) return t;
+    const eveTomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 20, 0, 0, 0);
+    return Math.floor(eveTomorrow.getTime() / 1000);
   }
   const tom = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0, 0);
   return Math.floor(tom.getTime() / 1000);
@@ -888,7 +890,7 @@ async function checkReminders() {
           await tg("sendMessage", { chat_id: r.chatId, text: `⏰ Reminder: ${r.text}` });
         } else {
           // One-time task reminders carry done/snooze buttons (follow-up loop).
-          const fu = addFollowup(r.chatId, r.text, 0, Math.floor(Date.now() / 1000));
+          const fu = addFollowup(r.chatId, r.text, 0, Math.floor(Date.now() / 1000)); // messageId 0 = placeholder, rebound right after send
           const sent = await tg("sendMessage", {
             chat_id: r.chatId,
             text: `⏰ Reminder: ${r.text}`,
@@ -904,21 +906,27 @@ async function checkReminders() {
   }
 
   // One gentle nudge for follow-ups ignored for an hour; prune old resolved ones.
-  try {
-    const nowS = Math.floor(Date.now() / 1000);
-    for (const f of dueNudges(nowS)) {
+  const nowS = Math.floor(Date.now() / 1000);
+  for (const f of dueNudges(nowS)) {
+    try {
+      // Mark BEFORE sending — same state-before-effect ordering as resolveFollowup;
+      // a lost nudge beats a double-nudge when an [AUTO] run overlaps the tick.
+      markNudged(f.id);
       const sent = await tg("sendMessage", {
         chat_id: f.chatId,
         text: `עדיין רלוונטי? ⏰ ${f.text}`,
         reply_markup: fuKeyboard(f.id),
       });
-      markNudged(f.id);
       rebindFollowup(f.id, sent.message_id);
       console.log(`[REMIND] nudged ${f.id} -> ${f.chatId}`);
+    } catch (e: any) {
+      console.error(`[ERR] nudge ${f.id}: ${e?.message ?? e}`);
     }
+  }
+  try {
     pruneFollowups(nowS);
   } catch (e: any) {
-    console.error(`[ERR] nudges: ${e?.message ?? e}`);
+    console.error(`[ERR] prune: ${e?.message ?? e}`);
   }
 }
 

@@ -24,6 +24,7 @@ import { getDb, insertMessage, recentMessages, searchMessages, renderRecall, imp
 import { coreMemoryBlock, importMemoryMd } from "./memory";
 import { skillsIndexBlock } from "./skills";
 import { redact } from "./redact";
+import { shouldReview, runReview } from "./review";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -780,6 +781,15 @@ async function handleMessage(msg: TgMessage) {
     }
     console.log(`[DONE] replied to ${fromId}`);
     void setReaction(chatId, msg.message_id, outcomeReaction(true));
+    // Self-improvement pass (Phase 7): detached, cooldown-gated, never blocks.
+    if (shouldReview(chatId, Math.floor(Date.now() / 1000))) {
+      try {
+        const transcript = recentMessages(db, chatId, 20).map((m) => ({ role: m.role, content: m.content }));
+        runReview(transcript, { claudeBin: CLAUDE_BIN, cwd: PROJECT_DIR, env: process.env });
+      } catch (e: any) {
+        console.error(`[ERR] review: ${e?.message ?? e}`);
+      }
+    }
   } catch (e: any) {
     console.error(`[ERR] handling message from ${fromId}: ${e?.message ?? e}`);
     void setReaction(chatId, msg.message_id, outcomeReaction(false));

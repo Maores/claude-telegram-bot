@@ -76,7 +76,10 @@ Picked from the feature brainstorm. Numbered = urgency order within each group (
   explicit confirm) `gh repo rename`. Scope details in the project memory `call-it-telegram-agent.md`.
   Keep droplet `~/claude-bot` path and the local Windows folder name (tooling is keyed to both).
 - [ ] Morning briefing — 8:00 push: calendar + unread-email summary + weather (and optional headlines).
-- [ ] systemd service — replace tmux + `@reboot` cron (`Restart=always`, journald logs, resource limits).
+- [x] systemd service — DONE 2026-06-11: `/etc/systemd/system/telegram-agent.service` (`Restart=always`,
+  journald, EnvironmentFile=.env); @reboot cron removed; kill-test verified (SIGKILL → auto-restart in 5s).
+  Trigger: the tmux poller died unexplained that evening and took its logs with it. No memory caps —
+  claude children need the 1 GB box's headroom.
 - [ ] Usage / cost tracking — tokens/cost per message + per day, a `/usage` command, optional daily budget guard.
 - [ ] Multi-user pairing & isolation — access.json pairing/groups stub; per-user history/memory/reminders; invite flow.
 - [ ] Calendar polish — recurring-event editing (this / this-and-future / all), an explicit default calendar,
@@ -94,14 +97,17 @@ chat) and the bot escalates to **Opus** only on explicit/heuristic signals — `
 - (Interview angle: considered the "smart LLM router" design and rejected it on measured-latency grounds.)
 
 ## Bugs & risks
-- [ ] **כפתורי תגובה לתזכורות לא מגיבים מיד** — כשלוחצים על כפתור (inline keyboard) אחרי שהבוט שולח
-  תזכורת, לפעמים אין תגובה מיידית והכפתור נשאר "לחוץ" ללא אישור. נראה כבעיה ב-callback handler של
-  `poller.ts`. (דווח 2026-06-11)
-- [ ] **כפתורי follow-up של תזכורת ישנה לא מתנקים** — אחרי שמגיעה תזכורת שנייה (follow-up "עדיין רלוונטי?")
-  ועונים עליה, ההודעה של התזכורת הראשונה עדיין מציגה כפתורים לחיצים — למרות שכבר ענו על ה-follow-up שמיוחס
-  לה. הכפתורים של התזכורת הראשונה צריכים להיעלם או להתנטרל ברגע שה-follow-up שלה טופל. (דווח 2026-06-11)
-- [ ] `reminders.json` has a read-modify-write race between the poller and `remind.ts` (mitigated by
-  atomic temp+rename writes, not eliminated). The SQLite migration would remove it.
+- [ ] **כפתורי תגובה לתזכורות לא מגיבים מיד** (דווח 2026-06-11) — ROOT-CAUSED same day: the sequential
+  update loop awaits each claude turn before even fetching the next batch, so a button press waits out
+  the whole turn. No small patch fixes it; the non-blocking-loop design is ready for review at
+  `docs/superpowers/specs/2026-06-11-nonblocking-loop-design.md` (also delivers true mid-answer /stop).
+- [x] **כפתורי follow-up של תזכורת ישנה לא מתנקים** (דווח 2026-06-11) — FIXED same day, PR #15: the nudge
+  now strips the original message's keyboard at handover (one live button set per follow-up). Live-verified
+  on the droplet with a forced nudge.
+- [x] `reminders.json` read-modify-write race (poller vs `remind.ts` CLI) — FIXED 2026-06-11, PR #16:
+  cross-process lockfile (`withFileLock` — O_EXCL create, 5s stale-steal, 1.5s timeout then proceed-without,
+  so a stuck lock can't brick reminders) around every mutator in `reminders.ts`, both stores. The SQLite
+  migration would still supersede this someday.
 - [ ] Telegram replies are plain text only (no Markdown rendering) — possible future polish.
 - [ ] Calendar writes are gated only by the bot's confirm-before-write instruction in CLAUDE.md, not
   enforced in code (fine for a single-user bot). Editing a recurring event is refused; deleting a

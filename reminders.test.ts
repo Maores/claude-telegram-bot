@@ -188,3 +188,54 @@ test("follow-up ids are never reused, even after prune", () => {
   const b = addFollowup(1, "y", 2, T0);
   expect(b.id).not.toBe(a.id);
 });
+
+// --- withFileLock: cross-process mutation lock (poller vs remind.ts CLI) ------
+
+import { withFileLock } from "./reminders.ts";
+import { writeFileSync, utimesSync, statSync } from "node:fs";
+
+test("withFileLock holds the lockfile during fn and removes it after", () => {
+  const lock = TMP + ".lock";
+  let seenDuring = false;
+  const out = withFileLock(TMP, () => {
+    seenDuring = existsSync(lock);
+    return 42;
+  });
+  expect(out).toBe(42);
+  expect(seenDuring).toBe(true);
+  expect(existsSync(lock)).toBe(false);
+});
+
+test("withFileLock removes the lock even when fn throws", () => {
+  const lock = TMP + ".lock";
+  expect(() => withFileLock(TMP, () => { throw new Error("boom"); })).toThrow("boom");
+  expect(existsSync(lock)).toBe(false);
+});
+
+test("withFileLock steals a stale lock without waiting out the timeout", () => {
+  const lock = TMP + ".lock";
+  writeFileSync(lock, "99999"); // a crashed process's leftover
+  const old = Date.now() / 1000 - 60;
+  utimesSync(lock, old, old); // make it 60s old (stale threshold is 5s)
+  const t0 = Date.now();
+  const out = withFileLock(TMP, () => "ran", { timeoutMs: 1500, staleMs: 5000 });
+  expect(out).toBe("ran");
+  expect(Date.now() - t0).toBeLessThan(500); // stolen, not waited
+  expect(existsSync(lock)).toBe(false);
+});
+
+test("withFileLock proceeds (availability over deadlock) when a FRESH lock never clears", () => {
+  const lock = TMP + ".lock";
+  writeFileSync(lock, "12345"); // fresh foreign lock, never released
+  const t0 = Date.now();
+  const out = withFileLock(TMP, () => "ran-anyway", { timeoutMs: 200, staleMs: 60_000 });
+  expect(out).toBe("ran-anyway");
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(190); // waited out the timeout first
+  rmSync(lock); // ours to clean: fn ran lockless, so the foreign lock remains
+});
+
+test("mutators run under the lock (addOnce leaves no lockfile behind)", () => {
+  addOnce(7, 1_900_000_000, "lock smoke");
+  expect(existsSync(TMP + ".lock")).toBe(false);
+  expect(listFor(7).length).toBe(1);
+});

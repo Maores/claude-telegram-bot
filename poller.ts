@@ -1021,7 +1021,10 @@ async function handleCallback(cq: NonNullable<TgUpdate["callback_query"]>) {
 /** /stop at dispatch level: kill the running child AND drop that chat's
  *  queued turns. Instant — never spawns claude, never enters a queue. */
 async function handleStopDispatch(msg: TgMessage) {
-  if (!msg.from || !loadAllowList().has(String(msg.from.id))) return;
+  if (!msg.from || !loadAllowList().has(String(msg.from.id))) {
+    console.log(redact(`[SKIP] unauthorized /stop from ${msg.from?.id ?? "?"}`));
+    return;
+  }
   const chatId = msg.chat.id;
   const hadRun = stopChild(chatId);
   const dropped = chatQueues.drop(chatId);
@@ -1098,6 +1101,10 @@ async function checkReminders() {
       }
       console.log(redact(`[REMIND] fired ${r.id} -> ${r.chatId}: ${r.text}`));
     } catch (e: any) {
+      if (e instanceof TurnStopped) {
+        console.log(`[STOP] [AUTO] run ${r.id} stopped by /stop`);
+        continue;
+      }
       console.error(`[ERR] send reminder ${r.id}: ${e?.message ?? e}`);
     }
   }

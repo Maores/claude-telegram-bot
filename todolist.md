@@ -118,6 +118,10 @@ chat) and the bot escalates to **Opus** only on explicit/heuristic signals — `
 - [ ] Calendar writes are gated only by the bot's confirm-before-write instruction in CLAUDE.md, not
   enforced in code (fine for a single-user bot). Editing a recurring event is refused; deleting a
   recurring master would remove the whole series.
+- [ ] `/stop` with an `[AUTO]` run overlapping an interactive turn (same chat) kills whichever child
+  registered LAST in the single `inFlight` slot — the other keeps running despite the נעצר reply.
+  Pre-existing (predates the non-blocking loop, flagged in its review 2026-06-12); fix = track
+  multiple flights per chat. Rare: needs [AUTO] + interactive at the same instant.
 
 ## Things to notice (deploy/ops gotchas)
 - Deploy to the server with `git fetch origin && git reset --hard origin/main` — a plain `git pull`

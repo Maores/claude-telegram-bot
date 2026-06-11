@@ -27,6 +27,8 @@ import { skillsIndexBlock } from "./skills";
 import { redact } from "./redact";
 import { resolveBackend, transcribeVoice, shouldEchoTranscript, VOICE_MAX_SEC } from "./transcribe";
 import { shouldReview, runReview } from "./review";
+import { classifyUpdate, isStopCommand } from "./dispatch";
+export { isStopCommand }; // poller.test.ts and external users keep their import path
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -209,16 +211,6 @@ function registerChild(chatId: number, proc: import("bun").Subprocess) {
  *  wiping a newer run's entry). */
 function unregisterChild(chatId: number, proc: import("bun").Subprocess) {
   if (inFlight.get(chatId) === proc) inFlight.delete(chatId);
-}
-
-/** True when `text` is exactly the /stop command (optionally @-mentioning this
- *  bot). Case-insensitive; trims surrounding whitespace. A normal message that
- *  merely contains "/stop" is not a stop command and never interrupts a run. */
-export function isStopCommand(text: string, botUsername: string): boolean {
-  const t = (text ?? "").trim().toLowerCase();
-  if (t === "/stop") return true;
-  if (botUsername && t === `/stop@${botUsername.toLowerCase()}`) return true;
-  return false;
 }
 
 /** The finishing reaction: 👍 on success, 👎 on failure. */

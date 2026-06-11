@@ -22,35 +22,27 @@ Feature analysis behind this ordering: `docs/research/2026-06-10-hermes-feature-
   summary runs on it), Gmail drafts two-step flow (compose → approve → draft in
   real Gmail; no send tool exists by design), bot self-created its first skill.
 
-## Phase 4 — Protection floor
+## Phase 4 — Protection floor — DONE (2026-06-11)
 
-The safety story. Mostly testable dark, small diffs, high CV value.
+- ~~Hardline command blocklist~~ (`guard.ts` + PreToolUse hook, wired on the
+  droplet via server-side settings.local.json; live-verified).
+- ~~Least-privilege `[AUTO]` sessions~~ (`--disallowedTools` + guard env flag).
+- ~~Secret redaction~~ (`redact.ts` at the `tg()` chokepoint + log lines;
+  live-verified — a fired reminder containing a fake key logged as
+  `[REDACTED…3456]`). PR #11.
 
-- **Hardline command blocklist** (hook + `guard.ts`): catastrophic shell
-  commands (`rm -rf /`, `mkfs`, `dd` to devices, fork bombs, shutdown, SSH/env
-  tampering) refused in code, fail closed — even in full-permission mode.
-- **Least-privilege `[AUTO]` sessions**: unattended runs can't schedule more
-  reminders (self-replication), file drafts, or touch guard/config files.
-- **Secret redaction** on the output path: tokens/keys masked before any reply
-  or log line leaves the bot.
+## Phase 5 — Feel — core DONE (2026-06-11)
 
-## Phase 5 — Feel
-
-What makes it pleasant to use, every single day.
-
-- **Reaction acks + typing**: 👀 when it starts working on your message,
-  👍/👎 on finish/fail, typing bubble while thinking.
-- **`/stop`**: interrupt a runaway answer (today nothing can).
-- **Inline buttons** for the existing confirm flows (calendar/email "yes / no /
-  change") — needs callback-query support in the poller, which also unlocks
-  approval buttons for Phase 4's guard later.
-- **Reminder follow-ups** (Maor's request, 2026-06-11): after a reminder fires,
-  the bot checks back whether the task actually got done — inline buttons like
-  "done ✓" / "remind me again later". "Done" closes the loop; "later"
-  reschedules; either way no duplicate reminders pile up on the same topic.
-  Design talk pending: when the follow-up fires (immediately vs. after a while),
-  snooze intervals, and how it treats repeating reminders. First real consumer
-  of the callback-query infra above.
+- ~~Reaction acks + typing~~: 👀 → 👍/👎 + typing bubble. PR #10.
+- ~~`/stop`~~ (kills background `[AUTO]` runs immediately; a mid-answer /stop
+  is read only after the answer — true interruption needs the non-blocking
+  loop, still open below). PR #10.
+- ~~Callback-query infra + reminder follow-ups~~: one-time reminders carry
+  [בוצע ✓][תזכיר לי שוב]; snooze picks +1h/הערב/מחר; one nudge after an hour;
+  collision-proof ids. PR #12.
+- Still open in this phase: **confirm buttons** for calendar/email flows and
+  **guard approval buttons** (the callback infra is ready for them); the
+  **non-blocking message loop** for true mid-answer /stop.
 
 ## Phase 6 — Voice
 
@@ -65,10 +57,10 @@ The biggest daily-life upgrade; needs server-side setup (whisper.cpp + ffmpeg).
 
 Completes the self-improving story and makes automation cheap.
 
-- **Background review loop**: after a conversation, a restricted cheap session
-  asks "anything worth remembering / saving as a skill?" and writes through the
-  existing gates. The storage and the cleaner exist; this is the part that
-  fills the box unprompted.
+- ~~**Background review loop**~~ — DONE (2026-06-11, PR #13, pulled forward):
+  after replies, a detached haiku session whitelisted to `mem.ts`/`skill.ts`
+  persists facts/procedures through the existing gates (15-min cooldown; quiet;
+  the nightly summary now carries a "מה למדתי היום" digest line).
 - **Scheduler upgrades**: pre-check scripts with a wake gate (watch something,
   wake Claude only on change), `[SILENT]` runs, job chaining — with a fire-time
   injection scan.

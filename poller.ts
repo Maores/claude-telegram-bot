@@ -199,18 +199,37 @@ const REACTION_FAIL = "👎"; // something went wrong
 /** The bot's @username, learned at startup; used to recognize `/stop@thisbot`. */
 let botUsername = "";
 
-/** Claude child processes in flight, keyed by chat id, so /stop can interrupt
- *  the right run. The poller handles messages one at a time per chat, so a chat
- *  has at most one interactive run; [AUTO] runs may overlap and are killable too. */
-const inFlight = new Map<number, import("bun").Subprocess>();
+/** A claude child currently running for a chat, plus whether /stop killed it
+ *  (so the turn ends with "נעצר ✋" instead of the generic error reply). */
+interface Flight {
+  proc: import("bun").Subprocess;
+  stopped?: boolean;
+}
 
-function registerChild(chatId: number, proc: import("bun").Subprocess) {
-  inFlight.set(chatId, proc);
+/** Claude children in flight, keyed by chat id. The poller runs at most one
+ *  interactive turn per chat (ChatQueues guarantees it); [AUTO] runs may
+ *  overlap and are killable too. */
+const inFlight = new Map<number, Flight>();
+
+function registerChild(chatId: number, proc: import("bun").Subprocess): Flight {
+  const f: Flight = { proc };
+  inFlight.set(chatId, f);
+  return f;
 }
 /** Only clear the slot if it still holds *this* process (avoid a late finisher
  *  wiping a newer run's entry). */
 function unregisterChild(chatId: number, proc: import("bun").Subprocess) {
-  if (inFlight.get(chatId) === proc) inFlight.delete(chatId);
+  if (inFlight.get(chatId)?.proc === proc) inFlight.delete(chatId);
+}
+/** /stop: mark the running child stopped and kill it. True if one existed. */
+function stopChild(chatId: number): boolean {
+  const f = inFlight.get(chatId);
+  if (!f) return false;
+  f.stopped = true;
+  try {
+    f.proc.kill();
+  } catch {}
+  return true;
 }
 
 /** The finishing reaction: 👍 on success, 👎 on failure. */
@@ -558,6 +577,14 @@ class StreamRenderer {
   }
 }
 
+/** Thrown when /stop killed this turn's child — callers end the turn quietly
+ *  ("נעצר ✋" already rendered) instead of sending the generic error reply. */
+export class TurnStopped extends Error {
+  constructor() {
+    super("turn stopped by /stop");
+  }
+}
+
 /** Extra, optional knobs for a single claude -p spawn. Used to put unattended
  *  [AUTO] sessions in least-privilege mode without changing normal messages. */
 export interface SpawnOpts {
@@ -594,7 +621,7 @@ async function streamClaude(
   );
   // Track this child so /stop can interrupt it; clear the slot when it exits,
   // however it exits (normal, error, timeout, or killed by /stop).
-  registerChild(chatId, proc);
+  const flight = registerChild(chatId, proc);
   void proc.exited.finally(() => unregisterChild(chatId, proc));
   const stderrP = new Response(proc.stderr).text().catch(() => "");
   proc.stdin!.write(prompt);
@@ -642,6 +669,11 @@ async function streamClaude(
 
   const code = await proc.exited;
   const final = parser.finalText();
+
+  if (flight.stopped) {
+    await renderer.render(prefix + (final ? final + "\n\n" : "") + "נעצר ✋").catch(() => {});
+    throw new TurnStopped();
+  }
 
   if (timedOut) {
     if (final) {
@@ -707,12 +739,9 @@ async function handleMessage(msg: TgMessage) {
   // and does NOT interrupt a running turn. The receive loop awaits interactive
   // turns sequentially, so in practice this reaches concurrently-running
   // children — an [AUTO] reminder job, or a future non-blocking turn.
+  // Reached only in POLL_SERIAL mode — dispatch intercepts /stop otherwise.
   if (isStopCommand(msg.text ?? "", botUsername)) {
-    const running = inFlight.get(chatId);
-    if (running) {
-      try {
-        running.kill(); // SIGTERM
-      } catch {}
+    if (stopChild(chatId)) {
       await tg("sendMessage", { chat_id: chatId, text: "נעצר ✋" }).catch(() => {});
     } else {
       await tg("sendMessage", { chat_id: chatId, text: "אין כרגע משימה רצה לעצור." }).catch(() => {});
@@ -917,6 +946,19 @@ async function handleMessage(msg: TgMessage) {
       }
     }
   } catch (e: any) {
+    if (e instanceof TurnStopped) {
+      // The stop reply is already rendered; record a quiet history marker so
+      // the next turn's context shows the interruption, and skip 👎 + error.
+      console.log(`[STOP] turn for ${fromId} stopped mid-answer`);
+      try {
+        const db = getDb();
+        const now = Math.floor(Date.now() / 1000);
+        insertMessage(db, { chatId, role: "user", content: historyNote, ts: now, model });
+        insertMessage(db, { chatId, role: "assistant", content: "[stopped]", ts: now, model });
+      } catch {}
+      return;
+    }
+    // …existing error path unchanged…
     console.error(`[ERR] handling message from ${fromId}: ${e?.message ?? e}`);
     void setReaction(chatId, msg.message_id, outcomeReaction(false));
     await sendReply(

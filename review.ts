@@ -13,7 +13,7 @@
  * the guard hook's least-privilege layer on as defense in depth.
  */
 
-export const REVIEW_COOLDOWN_S = Number(process.env.REVIEW_COOLDOWN_S ?? 900);
+export const REVIEW_COOLDOWN_S = Number(process.env.REVIEW_COOLDOWN_S ?? 900) || 900;
 
 export const REVIEW_ALLOWED_TOOLS = [
   "Bash(bun run mem.ts *)",

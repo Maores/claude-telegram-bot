@@ -561,6 +561,10 @@ export interface SpawnOpts {
   extraArgs?: string[];
   /** Merged into the child env (e.g. CLAUDE_AUTO_SESSION=1 for the guard hook). */
   env?: Record<string, string>;
+  /** Prepended to every Telegram render of this reply (and counted toward the
+   *  4096-char chunking), but NOT part of the returned/stored answer text.
+   *  Used for the 🎤 low-confidence transcript echo. */
+  renderPrefix?: string;
 }
 
 /** Run `claude -p` in streaming mode and render the reply to Telegram live.
@@ -591,6 +595,7 @@ async function streamClaude(
   proc.stdin!.write(prompt);
   proc.stdin!.end();
 
+  const prefix = opts.renderPrefix ?? "";
   const parser = new StreamParser();
   const renderer = new StreamRenderer(chatId, placeholderId);
 
@@ -609,7 +614,7 @@ async function streamClaude(
     if (now - lastFlush < FLUSH_MS) return;
     lastFlush = now;
     await renderer
-      .render(displayText(parser.state()))
+      .render(prefix + displayText(parser.state()))
       .catch((e) => console.error(`[ERR] render: ${e?.message ?? e}`));
   };
 
@@ -635,7 +640,7 @@ async function streamClaude(
 
   if (timedOut) {
     if (final) {
-      await renderer.render(final).catch(() => {});
+      await renderer.render(prefix + final).catch(() => {});
       return final;
     }
     throw new Error(`claude timed out after ${CLAUDE_TIMEOUT_MS}ms`);
@@ -644,7 +649,7 @@ async function streamClaude(
     throw new Error(`claude exited ${code}: ${(await stderrP).slice(0, 300)}`);
   }
   await renderer
-    .render(final || "(no reply)")
+    .render(prefix + (final || "(no reply)"))
     .catch((e) => console.error(`[ERR] final render: ${e?.message ?? e}`));
   return final;
 }

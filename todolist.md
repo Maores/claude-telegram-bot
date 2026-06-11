@@ -57,7 +57,12 @@ Picked from the feature brainstorm. Numbered = urgency order within each group (
 2. [ ] CI/CD (GitHub Actions) — run `bun test` on every push, auto-deploy to the droplet on green.
 3. [ ] Observability — structured JSON logs + a `/status` command (uptime, last error, model usage, metrics).
 
-### הדרכת חבר — Onboarding Guide for Similar Bot
+### הדרכת חבר — Onboarding Guide for Similar Bot — NEXT UP (before the loop build)
+Agreed shape (Maor + Claude, 2026-06-12): ONE sectioned doc in this public repo (not per-feature
+files) — feature menu + dependency map up front, then strictly self-contained per-feature sections
+written for the friend's own Claude Code to execute against his diverged codebase (conceptual steps +
+pointers into our reference code by GitHub path, not raw diffs). Split a section out only if it
+outgrows the format. Authored from this project's context (Maor's session), not the friend's.
 - [ ] **Feature-diff onboarding wizard** — חבר הכין סוכן Telegram דומה אך חסרים לו פיצ'רים. יצור מסמך/סקריפט
   אינטראקטיבי שישאל את החבר אילו פיצ'רים כבר קיימים אצלו, ואז יציג רק את ה-delta: פיצ'רים שחסרים,
   ואיפה שיש הבדל — יציג את השינויים שבוצעו כאן יחד עם הסבר למה. הגישה המומלצת:

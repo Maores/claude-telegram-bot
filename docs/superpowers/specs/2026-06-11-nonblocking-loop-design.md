@@ -79,14 +79,17 @@ child would surface as "something went wrong" — wrong message.)
   within ~1 s and reply נעצר), then a normal follow-up message (queue must
   resume cleanly).
 
-## Decisions for Maor (recommendations inline)
+## Decisions — SETTLED (Maor, 2026-06-12)
 
-1. `/stop` drops the chat's queued messages too — recommended yes (that's
-   what "stop" means when you've also queued more texts behind a turn).
-2. Callback serialization via one chain — recommended yes (file-race safety
-   over unmeasurable latency).
-3. Kill-switch default off (non-blocking active from day one) — recommended
-   yes; the switch exists for rollback, not as a feature flag.
+1. `/stop` drops the chat's queued messages too — **yes** ("stop" means stop;
+   re-send what you still want).
+2. Callback serialization via one chain — **yes** (file-race safety over
+   unmeasurable latency).
+3. Non-blocking active from day one; `POLL_SERIAL=1` exists as the rollback
+   switch, not a feature flag — **yes**.
+
+Spec is final; ready for writing-plans → build. Sequencing per Maor: the
+friend-onboarding doc (todolist הדרכת חבר) ships first, this build second.
 
 ## Testing
 

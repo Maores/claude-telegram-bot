@@ -179,3 +179,12 @@ test("pruneFollowups drops resolved entries older than 7 days, keeps pending", (
   expect(getFollowup(a.id)).toBeNull();
   expect(getFollowup(b.id)!.status).toBe("pending");
 });
+
+test("follow-up ids are never reused, even after prune", () => {
+  freshFollowupFile();
+  const a = addFollowup(1, "x", 1, T0 - 8 * 86_400);
+  resolveFollowup(a.id, "done");
+  pruneFollowups(T0);
+  const b = addFollowup(1, "y", 2, T0);
+  expect(b.id).not.toBe(a.id);
+});

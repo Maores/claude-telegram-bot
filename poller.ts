@@ -166,6 +166,69 @@ async function tg(method: string, params: Record<string, unknown> = {}): Promise
   throw new Error(`Telegram ${method} failed after retries`);
 }
 
+// ---------------------------------------------------------------------------
+// Reactions, typing, and the /stop interrupt (phase 5 — feel)
+// ---------------------------------------------------------------------------
+
+const REACTION_START = "👀"; // we picked up your message
+const REACTION_OK = "👍"; // finished
+const REACTION_FAIL = "👎"; // something went wrong
+
+/** The bot's @username, learned at startup; used to recognize `/stop@thisbot`. */
+let botUsername = "";
+
+/** Claude child processes in flight, keyed by chat id, so /stop can interrupt
+ *  the right run. The poller handles messages one at a time per chat, so a chat
+ *  has at most one interactive run; [AUTO] runs may overlap and are killable too. */
+const inFlight = new Map<number, import("bun").Subprocess>();
+
+function registerChild(chatId: number, proc: import("bun").Subprocess) {
+  inFlight.set(chatId, proc);
+}
+/** Only clear the slot if it still holds *this* process (avoid a late finisher
+ *  wiping a newer run's entry). */
+function unregisterChild(chatId: number, proc: import("bun").Subprocess) {
+  if (inFlight.get(chatId) === proc) inFlight.delete(chatId);
+}
+
+/** True when `text` is exactly the /stop command (optionally @-mentioning this
+ *  bot). Case-insensitive; trims surrounding whitespace. A normal message that
+ *  merely contains "/stop" is not a stop command and never interrupts a run. */
+export function isStopCommand(text: string, botUsername: string): boolean {
+  const t = (text ?? "").trim().toLowerCase();
+  if (t === "/stop") return true;
+  if (botUsername && t === `/stop@${botUsername.toLowerCase()}`) return true;
+  return false;
+}
+
+/** The finishing reaction: 👍 on success, 👎 on failure. */
+export function outcomeReaction(ok: boolean): string {
+  return ok ? REACTION_OK : REACTION_FAIL;
+}
+
+/** Set (or, with empty emoji, clear) a reaction on a message. Best-effort: a
+ *  reaction failure must never break the reply flow, so it's swallowed. */
+async function setReaction(chatId: number, messageId: number, emoji: string) {
+  try {
+    await tg("setMessageReaction", {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: emoji ? [{ type: "emoji", emoji }] : [],
+    });
+  } catch (e: any) {
+    console.error(`[ERR] setMessageReaction: ${e?.message ?? e}`);
+  }
+}
+
+/** Show the "typing…" bubble. Best-effort, like setReaction. */
+async function sendTyping(chatId: number) {
+  try {
+    await tg("sendChatAction", { chat_id: chatId, action: "typing" });
+  } catch (e: any) {
+    console.error(`[ERR] sendChatAction: ${e?.message ?? e}`);
+  }
+}
+
 /** Split text into chunks within Telegram's per-message limit, preferring newline breaks. */
 export function chunkText(text: string, limit = TG_LIMIT): string[] {
   const chunks: string[] = [];
@@ -430,6 +493,10 @@ async function streamClaude(
       env: { ...process.env, TELEGRAM_CHAT_ID: String(chatId), ...(opts.env ?? {}) },
     },
   );
+  // Track this child so /stop can interrupt it; clear the slot when it exits,
+  // however it exits (normal, error, timeout, or killed by /stop).
+  registerChild(chatId, proc);
+  void proc.exited.finally(() => unregisterChild(chatId, proc));
   const stderrP = new Response(proc.stderr).text().catch(() => "");
   proc.stdin!.write(prompt);
   proc.stdin!.end();
@@ -535,6 +602,24 @@ async function handleMessage(msg: TgMessage) {
 
   const words = msg.text ?? msg.caption ?? "";
 
+  // /stop — interrupt a claude child currently running for this chat. Never
+  // spawns claude; a normal message (even one mentioning "stop") is unaffected
+  // and does NOT interrupt a running turn. The receive loop awaits interactive
+  // turns sequentially, so in practice this reaches concurrently-running
+  // children — an [AUTO] reminder job, or a future non-blocking turn.
+  if (isStopCommand(msg.text ?? "", botUsername)) {
+    const running = inFlight.get(chatId);
+    if (running) {
+      try {
+        running.kill(); // SIGTERM
+      } catch {}
+      await tg("sendMessage", { chat_id: chatId, text: "נעצר ✋" }).catch(() => {});
+    } else {
+      await tg("sendMessage", { chat_id: chatId, text: "אין כרגע משימה רצה לעצור." }).catch(() => {});
+    }
+    return;
+  }
+
   // Identify a readable photo/document before downloading, so we can reject an
   // oversize file with an honest message instead of a doomed "try again".
   const info = attachmentInfo(msg);
@@ -592,6 +677,10 @@ async function handleMessage(msg: TgMessage) {
   const label = attachment?.kind ?? unsupported;
   console.log(`[MSG] ${name} (${model})${label ? ` [${label}]` : ""}: ${userMsg || "(no caption)"}`);
 
+  // 👀 ack on the user's message + a typing bubble while we work. Best-effort.
+  void setReaction(chatId, msg.message_id, REACTION_START);
+  void sendTyping(chatId);
+
   let placeholderId: number | null = null;
   try {
     const ph = await tg("sendMessage", { chat_id: chatId, text: "⏳" });
@@ -630,8 +719,10 @@ async function handleMessage(msg: TgMessage) {
       console.error(`[ERR] persist message: ${e?.message ?? e}`);
     }
     console.log(`[DONE] replied to ${fromId}`);
+    void setReaction(chatId, msg.message_id, outcomeReaction(true));
   } catch (e: any) {
     console.error(`[ERR] handling message from ${fromId}: ${e?.message ?? e}`);
+    void setReaction(chatId, msg.message_id, outcomeReaction(false));
     await sendReply(
       chatId,
       placeholderId,
@@ -772,6 +863,7 @@ async function main() {
     console.error(`[FATAL] could not reach Telegram / bad token: ${e?.message ?? e}`);
     process.exit(1);
   }
+  botUsername = me.username ?? "";
   console.log(`[BOT] Poller started as @${me.username}`);
 
   setInterval(() => {

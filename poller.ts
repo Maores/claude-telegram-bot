@@ -211,6 +211,53 @@ export function outcomeReaction(ok: boolean): string {
   return ok ? REACTION_OK : REACTION_FAIL;
 }
 
+// ---------------------------------------------------------------------------
+// Inline-button callbacks: reminder follow-ups (phase 5 — feel)
+// callback_data protocol (≤64 bytes): "fu:<action>:<followupId>"
+// ---------------------------------------------------------------------------
+
+export interface FuCallback {
+  action: "done" | "later" | "s1h" | "seve" | "stom";
+  id: string;
+}
+
+export function parseFuCallback(data: string): FuCallback | null {
+  const m = /^fu:(done|later|s1h|seve|stom):([\w-]+)$/.exec(data ?? "");
+  return m ? { action: m[1] as FuCallback["action"], id: m[2] } : null;
+}
+
+export function fuKeyboard(id: string): unknown {
+  return {
+    inline_keyboard: [[
+      { text: "בוצע ✓", callback_data: `fu:done:${id}` },
+      { text: "תזכיר לי שוב", callback_data: `fu:later:${id}` },
+    ]],
+  };
+}
+
+export function snoozeKeyboard(id: string): unknown {
+  return {
+    inline_keyboard: [[
+      { text: "+1 שעה", callback_data: `fu:s1h:${id}` },
+      { text: "הערב 20:00", callback_data: `fu:seve:${id}` },
+      { text: "מחר 09:00", callback_data: `fu:stom:${id}` },
+    ]],
+  };
+}
+
+/** Snooze target time (epoch s). Evening = today 20:00, or tomorrow if past. */
+export function snoozeTarget(action: "s1h" | "seve" | "stom", nowEpoch: number): number {
+  if (action === "s1h") return nowEpoch + 3600;
+  const now = new Date(nowEpoch * 1000);
+  if (action === "seve") {
+    const eve = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 20, 0, 0, 0);
+    const t = Math.floor(eve.getTime() / 1000);
+    return t > nowEpoch ? t : t + 86_400;
+  }
+  const tom = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0, 0);
+  return Math.floor(tom.getTime() / 1000);
+}
+
 /** Set (or, with empty emoji, clear) a reaction on a message. Best-effort: a
  *  reaction failure must never break the reply flow, so it's swallowed. */
 async function setReaction(chatId: number, messageId: number, emoji: string) {

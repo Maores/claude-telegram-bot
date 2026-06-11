@@ -1053,6 +1053,16 @@ async function checkReminders() {
       // Mark BEFORE sending — same state-before-effect ordering as resolveFollowup;
       // a lost nudge beats a double-nudge when an [AUTO] run overlaps the tick.
       markNudged(f.id);
+      // The nudge message takes over the buttons; strip the original reminder's
+      // keyboard first so the same follow-up never has two live button sets
+      // (the old one stayed clickable forever after the rebind below).
+      if (f.messageId) {
+        await tg("editMessageReplyMarkup", {
+          chat_id: f.chatId,
+          message_id: f.messageId,
+          reply_markup: { inline_keyboard: [] },
+        }).catch((e: any) => console.error(`[ERR] clear keyboard ${f.id}: ${e?.message ?? e}`));
+      }
       const sent = await tg("sendMessage", {
         chat_id: f.chatId,
         text: `עדיין רלוונטי? ⏰ ${f.text}`,

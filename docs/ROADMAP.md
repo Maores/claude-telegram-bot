@@ -46,10 +46,11 @@ Feature analysis behind this ordering: `docs/research/2026-06-10-hermes-feature-
 
 ## Phase 6 — Voice
 
-The biggest daily-life upgrade; needs server-side setup (whisper.cpp + ffmpeg).
-
-- **Voice notes in**: speak to the bot; transcript injected like a typed
-  message.
+- ~~**Voice notes in**~~ — DONE (2026-06-11, PR #14, deployed): voice bubble →
+  Groq-hosted whisper-large-v3-turbo (free tier; the 1 GB droplet can't hold
+  the Hebrew-tuned local models) → transcript flows in like a typed message;
+  🎤 transcript echo when confidence is low; swappable `transcribe.ts` backend
+  keeps the keyless whisper.cpp option alive (DEPLOY.md step 7b).
 - **Voice replies out** (later): answers as Telegram voice bubbles via keyless
   TTS.
 

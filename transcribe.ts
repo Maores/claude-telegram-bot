@@ -125,6 +125,10 @@ export async function groqTranscribe(
     form.append("file", Bun.file(path), basename(path) || "voice.oga");
     form.append("model", opts.model ?? GROQ_STT_MODEL);
     form.append("response_format", "verbose_json");
+    // 4xx and malformed-body errors are final; network/abort errors retry once.
+    // The flag (not a message match) decides, so an error thrown mid-body-read
+    // can never be misclassified as retryable.
+    let final = false;
     try {
       const res = await fetchFn(GROQ_STT_URL, {
         method: "POST",
@@ -137,14 +141,27 @@ export async function groqTranscribe(
         continue; // retry once on server errors
       }
       if (!res.ok) {
-        throw new Error(`groq HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+        final = true;
+        let body = "(body unreadable)";
+        try {
+          body = (await res.text()).slice(0, 200);
+        } catch {}
+        throw new Error(`groq HTTP ${res.status}: ${body}`);
       }
-      const data: any = await res.json();
-      if (typeof data?.text !== "string") throw new Error("groq response has no text field");
+      let data: any;
+      try {
+        data = await res.json();
+      } catch {
+        final = true;
+        throw new Error("groq returned a malformed body");
+      }
+      if (typeof data?.text !== "string") {
+        final = true;
+        throw new Error("groq response has no text field");
+      }
       return { text: data.text.trim(), confidence: deriveConfidence(data.segments) };
     } catch (e: any) {
-      // 4xx and malformed-body errors are final; network/abort errors retry once.
-      if (e instanceof Error && /groq HTTP 4\d\d|no text field/.test(e.message)) throw e;
+      if (final) throw e;
       lastErr = e;
     }
   }

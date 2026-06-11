@@ -224,3 +224,27 @@ test("groqTranscribe throws on a 200 whose body has no text field", async () => 
     /no text field/,
   );
 });
+
+test("groqTranscribe gives up after two 5xx attempts and throws the last error", async () => {
+  let n = 0;
+  const fetchFn = (async () => {
+    n++;
+    return new Response("boom", { status: 500 });
+  }) as typeof fetch;
+  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+    /groq HTTP 500/,
+  );
+  expect(n).toBe(2);
+});
+
+test("groqTranscribe treats a malformed 200 body as final (no retry)", async () => {
+  let n = 0;
+  const fetchFn = (async () => {
+    n++;
+    return new Response("<html>not json</html>", { status: 200 });
+  }) as typeof fetch;
+  await expect(groqTranscribe("uploads/none.oga", { apiKey: "k", fetchFn })).rejects.toThrow(
+    /malformed body/,
+  );
+  expect(n).toBe(1);
+});

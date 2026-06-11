@@ -400,6 +400,17 @@ export function voiceInfo(
   };
 }
 
+/** True when there is nothing to act on: no readable attachment, no typed
+ *  words, and no voice transcript. A transcribed voice note arrives with empty
+ *  `words` but IS the message — it must never be declined (the Task 8 bug). */
+export function shouldDeclineUnreadable(
+  attachment: { path: string; kind: string } | null,
+  words: string,
+  voiceText: string | null,
+): boolean {
+  return !attachment && !words && voiceText === null;
+}
+
 /** Download a Telegram file by file_id into ./uploads and return its local path. */
 async function downloadFile(fileId: string, preferredName?: string): Promise<string> {
   const info = await tg("getFile", { file_id: fileId });
@@ -720,6 +731,7 @@ async function handleMessage(msg: TgMessage) {
   // Voice notes (phase 6): transcribe, then treat exactly like a typed message.
   // Gates run BEFORE the download; the ack fires early because transcription
   // adds latency before the ⏳ placeholder appears.
+  // A caption on a voice message (possible only via bots/forwards) is dropped.
   const voice = voiceInfo(msg);
   let voiceText: string | null = null;
   let voiceConfidence: number | null = null;
@@ -741,7 +753,7 @@ async function handleMessage(msg: TgMessage) {
     if (isTooLarge(voice.size)) {
       await tg("sendMessage", {
         chat_id: chatId,
-        text: "That file is too large for me to fetch — Telegram caps bot downloads at ~20 MB.",
+        text: "ההקלטה גדולה מדי בשבילי — טלגרם מגביל הורדות של בוטים בסביבות 20MB.",
       }).catch(() => {});
       return;
     }
@@ -753,9 +765,10 @@ async function handleMessage(msg: TgMessage) {
       audioPath = await downloadFile(voice.fileId, "voice.oga");
     } catch (e: any) {
       console.error(`[ERR] download voice from ${fromId}: ${e?.message ?? e}`);
+      void setReaction(chatId, msg.message_id, outcomeReaction(false));
       await tg("sendMessage", {
         chat_id: chatId,
-        text: "⚠️ I couldn't download that file from Telegram. Please try again.",
+        text: "⚠️ לא הצלחתי להוריד את ההקלטה מטלגרם. אפשר לנסות שוב?",
       }).catch(() => {});
       return;
     }
@@ -776,6 +789,8 @@ async function handleMessage(msg: TgMessage) {
       cleanupFile(audioPath);
     }
     if (!voiceText.trim()) {
+      // Terminal state: 👀 alone would read as "still working".
+      void setReaction(chatId, msg.message_id, outcomeReaction(false));
       await tg("sendMessage", {
         chat_id: chatId,
         text: "לא קלטתי מילים בהקלטה 🎤 אפשר לנסות שוב?",
@@ -813,9 +828,8 @@ async function handleMessage(msg: TgMessage) {
   // Media we recognize but can't open (video, audio, GIF, sticker, …).
   const unsupported = attachment ? null : unsupportedMediaKind(msg);
 
-  // Nothing readable and nothing said → polite, specific decline. A transcribed
-  // voice note has empty `words` but IS the message — it must not land here.
-  if (!attachment && !words && voiceText === null) {
+  // Nothing readable and nothing said → polite, specific decline.
+  if (shouldDeclineUnreadable(attachment, words, voiceText)) {
     const text = unsupported
       ? `I can't open ${unsupported} yet — I can read text, images, documents (PDFs, etc.), and voice notes.`
       : "I can read text, images, documents (PDFs, etc.), and voice notes right now — but not this kind of message yet.";

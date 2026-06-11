@@ -19,6 +19,7 @@ import {
   voiceInfo,
   voicePromptText,
   voiceHistoryNote,
+  shouldDeclineUnreadable,
 } from "./poller.ts";
 
 test("short text stays one chunk", () => {
@@ -338,4 +339,12 @@ test("voicePromptText marks the medium so Claude reads mishearings charitably", 
 
 test("voiceHistoryNote stores a compact searchable marker", () => {
   expect(voiceHistoryNote("call the bank")).toBe("[voice] call the bank");
+});
+
+test("shouldDeclineUnreadable declines only when nothing at all is actionable", () => {
+  expect(shouldDeclineUnreadable(null, "", null)).toBe(true); // sticker with no caption
+  expect(shouldDeclineUnreadable(null, "hi", null)).toBe(false); // typed text
+  expect(shouldDeclineUnreadable({ path: "/up/x.pdf", kind: "a file" }, "", null)).toBe(false); // attachment
+  // THE Task 8 regression: a transcribed voice note has empty words + no attachment.
+  expect(shouldDeclineUnreadable(null, "", "תזכיר לי מחר")).toBe(false);
 });

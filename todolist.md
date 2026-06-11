@@ -57,13 +57,14 @@ Picked from the feature brainstorm. Numbered = urgency order within each group (
 2. [ ] CI/CD (GitHub Actions) — run `bun test` on every push, auto-deploy to the droplet on green.
 3. [ ] Observability — structured JSON logs + a `/status` command (uptime, last error, model usage, metrics).
 
-### הדרכת חבר — Onboarding Guide for Similar Bot — NEXT UP (before the loop build)
-Agreed shape (Maor + Claude, 2026-06-12): ONE sectioned doc in this public repo (not per-feature
-files) — feature menu + dependency map up front, then strictly self-contained per-feature sections
-written for the friend's own Claude Code to execute against his diverged codebase (conceptual steps +
-pointers into our reference code by GitHub path, not raw diffs). Split a section out only if it
-outgrows the format. Authored from this project's context (Maor's session), not the friend's.
-- [ ] **Feature-diff onboarding wizard** — חבר הכין סוכן Telegram דומה אך חסרים לו פיצ'רים. יצור מסמך/סקריפט
+### הדרכת חבר — Onboarding Guide for Similar Bot — DONE 2026-06-12
+Delivered as `docs/FEATURES-INSTALL-GUIDE.md`: ONE fully self-contained doc (Maor's call — no repo
+digging needed; everything inline, per-feature isolation via strictly independent sections). 14
+features, dependency-ordered menu + install order, key code excerpts, and every live-found gotcha
+(.oga/FormData, 409 wars, FTS5 UPDATE trap, timezone, lockfile, hook fail-closed…). The "wizard"
+became the doc's usage prompt: the friend's own Claude Code detects what exists, interviews him,
+and installs the delta. (The auto-compare CLI idea stayed unbuilt — YAGNI.)
+- [x] **Feature-diff onboarding wizard** — חבר הכין סוכן Telegram דומה אך חסרים לו פיצ'רים. יצור מסמך/סקריפט
   אינטראקטיבי שישאל את החבר אילו פיצ'רים כבר קיימים אצלו, ואז יציג רק את ה-delta: פיצ'רים שחסרים,
   ואיפה שיש הבדל — יציג את השינויים שבוצעו כאן יחד עם הסבר למה. הגישה המומלצת:
   1. תעד את כל הפיצ'רים המעניינים שנוספו לפרויקט הזה (לפי git log + CLAUDE.md + todolist).

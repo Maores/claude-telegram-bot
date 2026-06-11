@@ -33,6 +33,7 @@ const PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
   /\bsk-[A-Za-z0-9_-]{16,}\b/g, // OpenAI/Anthropic-style keys
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, // GitHub tokens
+  /\bgsk_[A-Za-z0-9]{20,}\b/g, // Groq API keys
   /\bxox[abps]-[A-Za-z0-9-]{10,}\b/g, // Slack tokens
   /\bAKIA[A-Z0-9]{16}\b/g, // AWS access key id
   /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/g, // bearer auth headers

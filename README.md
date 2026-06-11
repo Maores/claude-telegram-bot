@@ -6,10 +6,12 @@ A 24/7 personal AI assistant on Telegram, powered by the local `claude` CLI
 
 ## How it works
 
-`poller.ts` (Bun) long-polls Telegram. For each text message from an
-allow-listed user it builds a prompt (long-term memory + recent history + the
-message), runs `claude -p --dangerously-skip-permissions` in this directory, and
-sends Claude's stdout back to the chat.
+`poller.ts` (Bun) long-polls Telegram. For each message from an allow-listed
+user — text, photo, document, or a voice note (transcribed first via Groq
+whisper or a swappable local command, echoed back 🎤 when confidence is low) —
+it builds a prompt (long-term memory + recent history + the message), runs
+`claude -p --dangerously-skip-permissions` in this directory, and sends
+Claude's stdout back to the chat.
 
 ## Layout
 

@@ -12,6 +12,10 @@ import {
   AUTO_DISALLOWED_TOOLS,
   isStopCommand,
   outcomeReaction,
+  parseFuCallback,
+  fuKeyboard,
+  snoozeKeyboard,
+  snoozeTarget,
 } from "./poller.ts";
 
 test("short text stays one chunk", () => {
@@ -255,4 +259,40 @@ test("isStopCommand handles a missing/unknown bot username", () => {
 test("outcomeReaction maps success/failure to 👍/👎", () => {
   expect(outcomeReaction(true)).toBe("👍");
   expect(outcomeReaction(false)).toBe("👎");
+});
+
+// ---------------------------------------------------------------------------
+// Task 5 — follow-up callback protocol helpers
+// ---------------------------------------------------------------------------
+
+test("parseFuCallback parses valid data and rejects junk", () => {
+  expect(parseFuCallback("fu:done:f3")).toEqual({ action: "done", id: "f3" });
+  expect(parseFuCallback("fu:s1h:f12")).toEqual({ action: "s1h", id: "f12" });
+  expect(parseFuCallback("fu:nope:f1")).toBeNull();
+  expect(parseFuCallback("cal:yes:1")).toBeNull(); // future namespaces are not ours
+  expect(parseFuCallback("")).toBeNull();
+});
+
+test("fuKeyboard / snoozeKeyboard carry the follow-up id in callback_data", () => {
+  const kb = fuKeyboard("f7") as any;
+  const flat = kb.inline_keyboard.flat().map((b: any) => b.callback_data);
+  expect(flat).toEqual(["fu:done:f7", "fu:later:f7"]);
+  const sk = snoozeKeyboard("f7") as any;
+  expect(sk.inline_keyboard.flat().map((b: any) => b.callback_data)).toEqual([
+    "fu:s1h:f7", "fu:seve:f7", "fu:stom:f7",
+  ]);
+});
+
+test("snoozeTarget: +1h, evening-rolls-to-tomorrow, tomorrow-morning", () => {
+  // 2026-06-11 10:00 local
+  const morning = Math.floor(new Date(2026, 5, 11, 10, 0, 0).getTime() / 1000);
+  expect(snoozeTarget("s1h", morning)).toBe(morning + 3600);
+  const eve = new Date(snoozeTarget("seve", morning) * 1000);
+  expect([eve.getDate(), eve.getHours()]).toEqual([11, 20]); // today 20:00
+  // 2026-06-11 21:30 local — evening already past, rolls to tomorrow 20:00
+  const night = Math.floor(new Date(2026, 5, 11, 21, 30, 0).getTime() / 1000);
+  const eve2 = new Date(snoozeTarget("seve", night) * 1000);
+  expect([eve2.getDate(), eve2.getHours()]).toEqual([12, 20]);
+  const tom = new Date(snoozeTarget("stom", night) * 1000);
+  expect([tom.getDate(), tom.getHours()]).toEqual([12, 9]);
 });

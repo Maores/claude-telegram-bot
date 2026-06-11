@@ -601,7 +601,7 @@ async function handleMessage(msg: TgMessage) {
   const name = msg.from.first_name || msg.from.username || fromId;
 
   if (!loadAllowList().has(fromId)) {
-    console.log(`[SKIP] unauthorized ${name} (${fromId}): ${(msg.text ?? msg.caption ?? "").slice(0, 50)}`);
+    console.log(redact(`[SKIP] unauthorized ${name} (${fromId}): ${(msg.text ?? msg.caption ?? "").slice(0, 50)}`));
     return;
   }
 

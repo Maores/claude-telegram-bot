@@ -6,9 +6,10 @@
  * CLAUDE.md and injected memory apply). Conversation continuity comes from a
  * per-chat history file, not a persistent Claude session.
  *
- * Text, photos, and documents are supported: attachments are downloaded from
- * Telegram into ./uploads and their local path is handed to Claude, which reads
- * them with its own file tools. Other kinds (voice, stickers, …) are declined.
+ * Text, photos, documents, and voice notes are supported: attachments are
+ * downloaded from Telegram into ./uploads — files are handed to Claude by path,
+ * voice is transcribed first (transcribe.ts) and flows in as a typed message.
+ * Other kinds (video, stickers, …) are declined honestly.
  *
  * Runs on Bun. Zero npm dependencies.
  */
@@ -24,6 +25,7 @@ import { getDb, insertMessage, recentMessages, searchMessages, renderRecall, imp
 import { coreMemoryBlock, importMemoryMd } from "./memory";
 import { skillsIndexBlock } from "./skills";
 import { redact } from "./redact";
+import { resolveBackend, transcribeVoice, shouldEchoTranscript, VOICE_MAX_SEC } from "./transcribe";
 import { shouldReview, runReview } from "./review";
 
 // ---------------------------------------------------------------------------
@@ -715,6 +717,73 @@ async function handleMessage(msg: TgMessage) {
     return;
   }
 
+  // Voice notes (phase 6): transcribe, then treat exactly like a typed message.
+  // Gates run BEFORE the download; the ack fires early because transcription
+  // adds latency before the ⏳ placeholder appears.
+  const voice = voiceInfo(msg);
+  let voiceText: string | null = null;
+  let voiceConfidence: number | null = null;
+  if (voice) {
+    if (resolveBackend() === "off") {
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: "עוד לא מחובר אצלי תמלול קולי, אז אני לא יכול להאזין להקלטות כרגע.",
+      }).catch(() => {});
+      return;
+    }
+    if (voice.duration > VOICE_MAX_SEC) {
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: `ההקלטה ארוכה מדי בשבילי — אני מתמלל עד ${Math.floor(VOICE_MAX_SEC / 60)} דקות.`,
+      }).catch(() => {});
+      return;
+    }
+    if (isTooLarge(voice.size)) {
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: "That file is too large for me to fetch — Telegram caps bot downloads at ~20 MB.",
+      }).catch(() => {});
+      return;
+    }
+    void setReaction(chatId, msg.message_id, REACTION_START);
+    void sendTyping(chatId);
+
+    let audioPath: string;
+    try {
+      audioPath = await downloadFile(voice.fileId, "voice.oga");
+    } catch (e: any) {
+      console.error(`[ERR] download voice from ${fromId}: ${e?.message ?? e}`);
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: "⚠️ I couldn't download that file from Telegram. Please try again.",
+      }).catch(() => {});
+      return;
+    }
+    try {
+      const tr = await transcribeVoice(audioPath);
+      voiceText = tr.text;
+      voiceConfidence = tr.confidence;
+    } catch (e: any) {
+      console.error(`[ERR] transcribe voice from ${fromId}: ${e?.message ?? e}`);
+      void setReaction(chatId, msg.message_id, outcomeReaction(false));
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: "⚠️ לא הצלחתי לתמלל את ההקלטה הפעם. אפשר לנסות שוב או לכתוב לי.",
+      }).catch(() => {});
+      return;
+    } finally {
+      // The audio is transient either way — transcribed or failed.
+      cleanupFile(audioPath);
+    }
+    if (!voiceText.trim()) {
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: "לא קלטתי מילים בהקלטה 🎤 אפשר לנסות שוב?",
+      }).catch(() => {});
+      return;
+    }
+  }
+
   // Identify a readable photo/document before downloading, so we can reject an
   // oversize file with an honest message instead of a doomed "try again".
   const info = attachmentInfo(msg);
@@ -747,19 +816,22 @@ async function handleMessage(msg: TgMessage) {
   // Nothing readable and nothing said → polite, specific decline.
   if (!attachment && !words) {
     const text = unsupported
-      ? `I can't open ${unsupported} yet — I can read text, images, and documents (PDFs, etc.).`
-      : "I can read text, images, and documents (PDFs, etc.) right now — but not this kind of message yet.";
+      ? `I can't open ${unsupported} yet — I can read text, images, documents (PDFs, etc.), and voice notes.`
+      : "I can read text, images, documents (PDFs, etc.), and voice notes right now — but not this kind of message yet.";
     await tg("sendMessage", { chat_id: chatId, text }).catch(() => {});
     return;
   }
 
-  const { model, prompt: userMsg } = pickModel(words);
+  const { model, prompt: userMsg } = pickModel(voiceText ?? words);
 
   // What Claude sees: the user's words plus a note about the media.
   // What we store in history: a compact placeholder (the file path is transient).
   let messageForClaude = userMsg;
   let historyNote = userMsg;
-  if (attachment) {
+  if (voiceText !== null) {
+    messageForClaude = voicePromptText(userMsg);
+    historyNote = voiceHistoryNote(userMsg);
+  } else if (attachment) {
     const note = `[The user sent ${attachment.kind}, saved at: ${attachment.path} — open and read it to answer.]`;
     messageForClaude = userMsg ? `${userMsg}\n\n${note}` : note;
     historyNote = userMsg ? `[sent ${attachment.kind}] ${userMsg}` : `[sent ${attachment.kind}]`;
@@ -769,12 +841,15 @@ async function handleMessage(msg: TgMessage) {
     messageForClaude = `${userMsg}\n\n${note}`;
     historyNote = `[sent ${unsupported}] ${userMsg}`;
   }
-  const label = attachment?.kind ?? unsupported;
+  const label = voiceText !== null ? "a voice note" : attachment?.kind ?? unsupported;
   console.log(redact(`[MSG] ${name} (${model})${label ? ` [${label}]` : ""}: ${userMsg || "(no caption)"}`));
 
   // 👀 ack on the user's message + a typing bubble while we work. Best-effort.
-  void setReaction(chatId, msg.message_id, REACTION_START);
-  void sendTyping(chatId);
+  // Voice notes already acked before transcription — skip the duplicate.
+  if (voiceText === null) {
+    void setReaction(chatId, msg.message_id, REACTION_START);
+    void sendTyping(chatId);
+  }
 
   let placeholderId: number | null = null;
   try {
@@ -801,9 +876,16 @@ async function handleMessage(msg: TgMessage) {
       console.error(`[ERR] skills: ${e?.message ?? e}`);
     }
 
+    const echoPrefix =
+      voiceText !== null && shouldEchoTranscript(voiceConfidence) ? `🎤 «${userMsg}»\n\n` : "";
     const answer =
-      (await streamClaude(buildPrompt(history, name, messageForClaude, recall, loadMemory(), skills), chatId, placeholderId, model)).trim() ||
-      "(no output)";
+      (await streamClaude(
+        buildPrompt(history, name, messageForClaude, recall, loadMemory(), skills),
+        chatId,
+        placeholderId,
+        model,
+        echoPrefix ? { renderPrefix: echoPrefix } : {},
+      )).trim() || "(no output)";
 
     const now = Math.floor(Date.now() / 1000);
     try {

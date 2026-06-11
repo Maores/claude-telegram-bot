@@ -63,3 +63,14 @@ test("redact() without a secrets arg uses the module snapshot (default path inta
   expect(redact(text)).toBe(redact(text, collectSecretValues()));
   expect(redact(text)).toContain("[REDACTED…3456]"); // vendor layer active on default path
 });
+
+test("redact masks a Groq-shaped key keeping the 4-char tail", () => {
+  const out = redact("auth with gsk_AbCdEfGhIjKlMnOpQrStUvWx1234 please", []);
+  expect(out).not.toContain("gsk_AbCdEfGhIjKlMnOpQrStUvWx1234");
+  expect(out).toContain("[REDACTED…1234]");
+});
+
+test("collectSecretValues picks up GROQ_API_KEY by its name", () => {
+  // layer 1 already covers the real key: the NAME matches /API_KEY/.
+  expect(collectSecretValues({ GROQ_API_KEY: "supersecretvalue" })).toContain("supersecretvalue");
+});

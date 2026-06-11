@@ -12,6 +12,8 @@
  * log lines. Pure; tests inject env/secrets explicitly.
  */
 
+// TOKEN/SECRET/PASSWORD/PASSWD/API_KEY/PRIVATE are from the standard spec list;
+// APIKEY and CREDENTIAL are deliberate extensions — strictly more coverage, no false-positive risk.
 const SECRET_NAME_RE = /TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE|CREDENTIAL/i;
 
 export function collectSecretValues(env: Record<string, string | undefined> = process.env): string[] {
@@ -42,6 +44,7 @@ const tail = (s: string) => `[REDACTED…${s.slice(-4)}]`;
 export function redact(text: string, secrets: string[] = SECRETS): string {
   if (!text) return text;
   let out = text;
+  // SECRETS is pre-sorted; this re-sort guarantees longest-first for caller-supplied lists too.
   // Sort longest-first so a secret that contains a shorter one is masked as a
   // single unit — avoids leaving a suffix fragment after the shorter match.
   const sorted = [...secrets].sort((a, b) => b.length - a.length);

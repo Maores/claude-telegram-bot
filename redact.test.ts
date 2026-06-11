@@ -57,3 +57,9 @@ test("clean text and Hebrew pass through untouched", () => {
 test("empty/undefined-ish input is returned as-is", () => {
   expect(redact("", [])).toBe("");
 });
+
+test("redact() without a secrets arg uses the module snapshot (default path intact)", () => {
+  const text = "key sk-abcdefghijklmnopqrstuvwxyz123456 here";
+  expect(redact(text)).toBe(redact(text, collectSecretValues()));
+  expect(redact(text)).toContain("[REDACTED…3456]"); // vendor layer active on default path
+});

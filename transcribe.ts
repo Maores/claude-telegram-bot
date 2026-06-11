@@ -196,9 +196,11 @@ export async function localTranscribe(
     stdout: "pipe",
     stderr: "pipe",
   });
+  // SIGKILL, not the default SIGTERM: a transcriber that traps SIGTERM would
+  // otherwise keep exited/stdout open forever and hang the await below.
   const killer = setTimeout(() => {
     try {
-      proc.kill();
+      proc.kill("SIGKILL");
     } catch {}
   }, timeoutMs);
   try {

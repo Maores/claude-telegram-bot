@@ -296,6 +296,26 @@ test("localTranscribe throws when TRANSCRIBE_CMD is not configured", async () =>
   await expect(localTranscribe("/up/v.oga", { cmd: "" })).rejects.toThrow(/TRANSCRIBE_CMD/);
 });
 
+test("localTranscribe SIGKILLs a stalled process at the timeout and rejects", async () => {
+  let killedWith: unknown;
+  let resolveExit!: (code: number) => void;
+  const exited = new Promise<number>((r) => (resolveExit = r));
+  const spawnFn = (() => ({
+    stdout: new Response("").body,
+    stderr: new Response("").body,
+    exited,
+    kill(sig?: unknown) {
+      killedWith = sig;
+      resolveExit(-1);
+    },
+  })) as unknown as typeof Bun.spawn;
+
+  await expect(
+    localTranscribe("/up/v.oga", { cmd: "wsp {input}", spawnFn, timeoutMs: 10 }),
+  ).rejects.toThrow(/exited -1/);
+  expect(killedWith).toBe("SIGKILL");
+});
+
 // --- transcribeVoice: dispatch by resolved backend ------------------------------
 
 test("transcribeVoice throws a clear error when no backend is configured", async () => {

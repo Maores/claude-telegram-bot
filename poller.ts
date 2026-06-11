@@ -27,7 +27,7 @@ import { skillsIndexBlock } from "./skills";
 import { redact } from "./redact";
 import { resolveBackend, transcribeVoice, shouldEchoTranscript, VOICE_MAX_SEC } from "./transcribe";
 import { shouldReview, runReview } from "./review";
-import { classifyUpdate, isStopCommand } from "./dispatch";
+import { classifyUpdate, ChatQueues, SerialChain, isStopCommand } from "./dispatch";
 export { isStopCommand }; // poller.test.ts and external users keep their import path
 
 // ---------------------------------------------------------------------------
@@ -231,6 +231,11 @@ function stopChild(chatId: number): boolean {
   } catch {}
   return true;
 }
+
+/** Non-blocking dispatch state (spec 2026-06-11): per-chat message FIFOs and
+ *  the one serialized callback chain. POLL_SERIAL=1 bypasses both. */
+const chatQueues = new ChatQueues();
+const cbChain = new SerialChain();
 
 /** The finishing reaction: 👍 on success, 👎 on failure. */
 export function outcomeReaction(ok: boolean): string {
@@ -1013,6 +1018,20 @@ async function handleCallback(cq: NonNullable<TgUpdate["callback_query"]>) {
   }
 }
 
+/** /stop at dispatch level: kill the running child AND drop that chat's
+ *  queued turns. Instant — never spawns claude, never enters a queue. */
+async function handleStopDispatch(msg: TgMessage) {
+  if (!msg.from || !loadAllowList().has(String(msg.from.id))) return;
+  const chatId = msg.chat.id;
+  const hadRun = stopChild(chatId);
+  const dropped = chatQueues.drop(chatId);
+  const text =
+    hadRun || dropped
+      ? `נעצר ✋${dropped ? ` (בוטלו גם ${dropped} הודעות שחיכו בתור)` : ""}`
+      : "אין כרגע משימה רצה לעצור.";
+  await tg("sendMessage", { chat_id: chatId, text }).catch(() => {});
+}
+
 // ---------------------------------------------------------------------------
 // Offset persistence (so restarts don't drop or replay messages)
 // ---------------------------------------------------------------------------
@@ -1197,6 +1216,9 @@ async function main() {
     void checkCalendarNudges();
   }, CAL_CHECK_MS);
 
+  const serialMode = process.env.POLL_SERIAL === "1";
+  if (serialMode) console.log("[BOT] POLL_SERIAL=1 — sequential update handling (rollback mode)");
+
   let offset = await initOffset();
 
   while (true) {
@@ -1211,18 +1233,38 @@ async function main() {
 
     for (const u of updates) {
       offset = u.update_id + 1;
-      if (u.message) {
-        try {
-          await handleMessage(u.message);
-        } catch (e: any) {
-          console.error(`[ERR] unhandled: ${e?.message ?? e}`);
+      if (serialMode) {
+        // Rollback mode: today's strictly sequential behavior, verbatim.
+        if (u.message) {
+          try {
+            await handleMessage(u.message);
+          } catch (e: any) {
+            console.error(`[ERR] unhandled: ${e?.message ?? e}`);
+          }
+        } else if (u.callback_query) {
+          try {
+            await handleCallback(u.callback_query);
+          } catch (e: any) {
+            console.error(`[ERR] callback: ${e?.message ?? e}`);
+          }
         }
-      } else if (u.callback_query) {
-        try {
-          await handleCallback(u.callback_query);
-        } catch (e: any) {
-          console.error(`[ERR] callback: ${e?.message ?? e}`);
+        continue;
+      }
+      switch (classifyUpdate(u, botUsername)) {
+        case "callback":
+          // Fire onto the serialized chain — ACK happens inside, instantly.
+          cbChain.enqueue(() => handleCallback(u.callback_query!));
+          break;
+        case "stop":
+          // Instant by design; safe to await (no claude, no queue).
+          await handleStopDispatch(u.message!);
+          break;
+        case "message": {
+          const m = u.message!;
+          chatQueues.enqueue(m.chat.id, () => handleMessage(m));
+          break;
         }
+        // "ignore": nothing — same as today's else-fallthrough.
       }
     }
     if (updates.length) saveOffset(offset);

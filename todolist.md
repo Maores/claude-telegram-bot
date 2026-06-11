@@ -57,10 +57,24 @@ Picked from the feature brainstorm. Numbered = urgency order within each group (
 2. [ ] CI/CD (GitHub Actions) — run `bun test` on every push, auto-deploy to the droplet on green.
 3. [ ] Observability — structured JSON logs + a `/status` command (uptime, last error, model usage, metrics).
 
+### הדרכת חבר — Onboarding Guide for Similar Bot
+- [ ] **Feature-diff onboarding wizard** — חבר הכין סוכן Telegram דומה אך חסרים לו פיצ'רים. יצור מסמך/סקריפט
+  אינטראקטיבי שישאל את החבר אילו פיצ'רים כבר קיימים אצלו, ואז יציג רק את ה-delta: פיצ'רים שחסרים,
+  ואיפה שיש הבדל — יציג את השינויים שבוצעו כאן יחד עם הסבר למה. הגישה המומלצת:
+  1. תעד את כל הפיצ'רים המעניינים שנוספו לפרויקט הזה (לפי git log + CLAUDE.md + todolist).
+  2. צור checklist או שאלון קצר שהחבר ממלא (מה כבר יש לו).
+  3. הפק "installation delta" — רק ההוראות הרלוונטיות למה שחסר, מסודרות לפי עדיפות.
+  (אפשרות: כלי CLI שרץ על ה-repo של החבר ומשווה קבצים אוטומטית)
+  (נפתח 2026-06-11)
+
 ### Not yet prioritized (from the same brainstorm)
-- [ ] Voice notes in (speech→text) — PARKED 2026-06-08: iPhone dictation already turns Maor's speech into
-  text before sending, so the bot needn't transcribe. Researched design on file if revisited (faster-whisper
-  + ivrit.ai `whisper-large-v3-turbo-ct2`, INT8, a warm Python worker, and a ~4GB droplet bump).
+- [x] Voice notes in (speech→text) — SHIPPED 2026-06-11 (PR #14), un-parked from 2026-06-08: speak a voice
+  bubble → Groq-hosted whisper-large-v3-turbo transcribes (swappable `transcribe.ts` backend, local
+  whisper.cpp path in code for later) → answered like a typed message; 🎤 transcript echo on low confidence.
+- [ ] Project rename to "Telegram agent" — deferred future todo (Maor, 2026-06-11): README/package.json/
+  todolist/DEPLOY wording, vault note + `[[Telegram bot]]` links, memory-file descriptions, and (with
+  explicit confirm) `gh repo rename`. Scope details in the project memory `call-it-telegram-agent.md`.
+  Keep droplet `~/claude-bot` path and the local Windows folder name (tooling is keyed to both).
 - [ ] Morning briefing — 8:00 push: calendar + unread-email summary + weather (and optional headlines).
 - [ ] systemd service — replace tmux + `@reboot` cron (`Restart=always`, journald logs, resource limits).
 - [ ] Usage / cost tracking — tokens/cost per message + per day, a `/usage` command, optional daily budget guard.
@@ -80,6 +94,12 @@ chat) and the bot escalates to **Opus** only on explicit/heuristic signals — `
 - (Interview angle: considered the "smart LLM router" design and rejected it on measured-latency grounds.)
 
 ## Bugs & risks
+- [ ] **כפתורי תגובה לתזכורות לא מגיבים מיד** — כשלוחצים על כפתור (inline keyboard) אחרי שהבוט שולח
+  תזכורת, לפעמים אין תגובה מיידית והכפתור נשאר "לחוץ" ללא אישור. נראה כבעיה ב-callback handler של
+  `poller.ts`. (דווח 2026-06-11)
+- [ ] **כפתורי follow-up של תזכורת ישנה לא מתנקים** — אחרי שמגיעה תזכורת שנייה (follow-up "עדיין רלוונטי?")
+  ועונים עליה, ההודעה של התזכורת הראשונה עדיין מציגה כפתורים לחיצים — למרות שכבר ענו על ה-follow-up שמיוחס
+  לה. הכפתורים של התזכורת הראשונה צריכים להיעלם או להתנטרל ברגע שה-follow-up שלה טופל. (דווח 2026-06-11)
 - [ ] `reminders.json` has a read-modify-write race between the poller and `remind.ts` (mitigated by
   atomic temp+rename writes, not eliminated). The SQLite migration would remove it.
 - [ ] Telegram replies are plain text only (no Markdown rendering) — possible future polish.

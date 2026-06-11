@@ -23,6 +23,7 @@ import { upcomingEvents, nudgeKey, loadNotified, saveNotified, pruneNotified } f
 import { getDb, insertMessage, recentMessages, searchMessages, renderRecall, importHistoryJson, type RecallHit } from "./db";
 import { coreMemoryBlock, importMemoryMd } from "./memory";
 import { skillsIndexBlock } from "./skills";
+import { redact } from "./redact";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -129,6 +130,10 @@ function readJson<T>(file: string, fallback: T): T {
 
 /** Call a Telegram Bot API method. Retries transient errors (429/409/network). */
 async function tg(method: string, params: Record<string, unknown> = {}): Promise<any> {
+  // Outgoing user-visible strings pass through the redactor — the one
+  // chokepoint every message the bot sends goes through (Phase 4).
+  if (typeof params.text === "string") params = { ...params, text: redact(params.text) };
+  if (typeof params.caption === "string") params = { ...params, caption: redact(params.caption) };
   const url = `https://api.telegram.org/bot${TOKEN}/${method}`;
   for (let attempt = 0; attempt < 3; attempt++) {
     let res: Response;
@@ -675,7 +680,7 @@ async function handleMessage(msg: TgMessage) {
     historyNote = `[sent ${unsupported}] ${userMsg}`;
   }
   const label = attachment?.kind ?? unsupported;
-  console.log(`[MSG] ${name} (${model})${label ? ` [${label}]` : ""}: ${userMsg || "(no caption)"}`);
+  console.log(redact(`[MSG] ${name} (${model})${label ? ` [${label}]` : ""}: ${userMsg || "(no caption)"}`));
 
   // 👀 ack on the user's message + a typing bubble while we work. Best-effort.
   void setReaction(chatId, msg.message_id, REACTION_START);
@@ -788,7 +793,7 @@ async function checkReminders() {
       } else {
         await tg("sendMessage", { chat_id: r.chatId, text: `⏰ Reminder: ${r.text}` });
       }
-      console.log(`[REMIND] fired ${r.id} -> ${r.chatId}: ${r.text}`);
+      console.log(redact(`[REMIND] fired ${r.id} -> ${r.chatId}: ${r.text}`));
     } catch (e: any) {
       console.error(`[ERR] send reminder ${r.id}: ${e?.message ?? e}`);
     }

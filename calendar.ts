@@ -56,9 +56,17 @@ export function parseEvents(icsString: string, calendarName?: string): CalEvent[
   const events: CalEvent[] = [];
   for (const v of Object.values(parsed)) {
     if (v?.type !== "VEVENT") continue;
-    const start = v.start instanceof Date ? v.start : new Date(v.start);
-    const end = v.end instanceof Date ? v.end : v.end ? new Date(v.end) : start;
+    let start = v.start instanceof Date ? v.start : new Date(v.start);
+    let end = v.end instanceof Date ? v.end : v.end ? new Date(v.end) : start;
     const allDay = v.datetype === "date" || (v.start as any)?.dateOnly === true;
+    // node-ical builds VALUE=DATE dates at LOCAL midnight (e.g. 2026-06-20 becomes
+    // 2026-06-19T21:00:00Z on Asia/Jerusalem +03:00). Normalize to UTC midnight via
+    // local getters so fmtDate (UTC getters) always re-emits the correct day — the
+    // same pattern used in parseTodos() in tasks.ts.
+    if (allDay) {
+      start = new Date(Date.UTC(start.getFullYear(), start.getMonth(), start.getDate()));
+      end   = new Date(Date.UTC(end.getFullYear(),   end.getMonth(),   end.getDate()));
+    }
     events.push({
       uid: String(v.uid ?? v.url ?? ""),
       title: String(v.summary ?? "(no title)").trim() || "(no title)",
@@ -110,11 +118,20 @@ export async function listEvents(fromISO: string, toISO: string): Promise<CalEve
 const pad = (n: number) => String(n).padStart(2, "0");
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/** Short local-time line, e.g. "Mon 09/06 09:00 — Dentist" or "Tue 10/06 all day — Holiday". */
+/** Short local-time line, e.g. "Mon 09/06 09:00 — Dentist" or "Tue 10/06 all day — Holiday".
+ *  All-day events use UTC getters (start is UTC midnight after parseEvents normalization);
+ *  timed events keep local getters so the displayed time matches the user's clock. */
 export function fmtEvent(e: CalEvent): string {
   const d = e.start;
-  const day = `${DAYS[d.getDay()]} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
-  const time = e.allDay ? "all day" : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  let day: string;
+  let time: string;
+  if (e.allDay) {
+    day  = `${DAYS[d.getUTCDay()]} ${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}`;
+    time = "all day";
+  } else {
+    day  = `${DAYS[d.getDay()]} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+    time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
   return `${day} ${time} — ${e.title}`;
 }
 

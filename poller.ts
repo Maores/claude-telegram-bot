@@ -51,6 +51,7 @@ const TG_LIMIT = 4096; // Telegram hard limit on message length
 const HISTORY_MAX = 20; // keep last 10 exchanges (user + assistant)
 const RECALL_K = Number(process.env.RECALL_K ?? 4); // max recalled past messages injected per turn
 const POLL_TIMEOUT = 30; // seconds Telegram holds a long-poll open
+const TG_FETCH_TIMEOUT_MS = (POLL_TIMEOUT + 15) * 1000; // hard cap on any Telegram fetch — a silently dead socket must never hang the update loop (covers the 30s long-poll + slack)
 const FLUSH_MS = 1500; // min gap between Telegram edits while streaming (rate-limit safe)
 const CAL_LEAD_MIN = Number(process.env.CAL_NUDGE_MINUTES ?? 15); // nudge this many minutes before an event
 const CAL_CHECK_MS = Number(process.env.CAL_CHECK_MS ?? 300_000); // how often to scan the calendar
@@ -146,7 +147,7 @@ function readJson<T>(file: string, fallback: T): T {
 // ---------------------------------------------------------------------------
 
 /** Call a Telegram Bot API method. Retries transient errors (429/409/network). */
-async function tg(method: string, params: Record<string, unknown> = {}): Promise<any> {
+async function tg(method: string, params: Record<string, unknown> = {}, opts: { signal?: AbortSignal } = {}): Promise<any> {
   // Outgoing user-visible strings pass through the redactor — the one
   // chokepoint every message the bot sends goes through (Phase 4).
   if (typeof params.text === "string") params = { ...params, text: redact(params.text) };
@@ -159,6 +160,9 @@ async function tg(method: string, params: Record<string, unknown> = {}): Promise
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(params),
+        signal: opts.signal
+          ? AbortSignal.any([opts.signal, AbortSignal.timeout(TG_FETCH_TIMEOUT_MS)])
+          : AbortSignal.timeout(TG_FETCH_TIMEOUT_MS),
       });
     } catch (e) {
       if (attempt === 2) throw e;
@@ -236,6 +240,21 @@ function stopChild(chatId: number): boolean {
  *  the one serialized callback chain. POLL_SERIAL=1 bypasses both. */
 const chatQueues = new ChatQueues();
 const cbChain = new SerialChain();
+
+// Graceful shutdown: a deploy's systemctl restart must drain what was already
+// consumed from Telegram (offset is saved at fetch time — anything enqueued
+// but unprocessed would otherwise be lost forever; this ate a button press
+// on 2026-06-12). SIGTERM stops the fetch loop; main() then awaits the queues.
+let stopping = false;
+let pollAbort: AbortController | null = null;
+function requestShutdown(sig: string) {
+  if (stopping) return;
+  stopping = true;
+  console.log(`[BOT] ${sig} — draining queues before exit`);
+  try { pollAbort?.abort(); } catch {}
+}
+process.on("SIGTERM", () => requestShutdown("SIGTERM"));
+process.on("SIGINT", () => requestShutdown("SIGINT"));
 
 /** The finishing reaction: 👍 on success, 👎 on failure. */
 export function outcomeReaction(ok: boolean): string {
@@ -1228,14 +1247,18 @@ async function main() {
 
   let offset = await initOffset();
 
-  while (true) {
+  while (!stopping) {
     let updates: TgUpdate[] = [];
     try {
-      updates = await tg("getUpdates", { offset, timeout: POLL_TIMEOUT });
+      pollAbort = new AbortController();
+      updates = await tg("getUpdates", { offset, timeout: POLL_TIMEOUT }, { signal: pollAbort.signal });
     } catch (e: any) {
+      if (stopping) break;
       console.error(`[ERR] getUpdates: ${e?.message ?? e}`);
       await sleep(3000);
       continue;
+    } finally {
+      pollAbort = null;
     }
 
     for (const u of updates) {
@@ -1276,6 +1299,13 @@ async function main() {
     }
     if (updates.length) saveOffset(offset);
   }
+
+  // Drain: finish everything already consumed from Telegram, bounded well
+  // under systemd's TimeoutStopSec (90s) so we exit before SIGKILL.
+  const GRACE_MS = 80_000;
+  await Promise.race([Promise.all([cbChain.idle(), chatQueues.idle()]), sleep(GRACE_MS)]);
+  console.log("[BOT] drained — exiting");
+  process.exit(0);
 }
 
 if (import.meta.main) main();

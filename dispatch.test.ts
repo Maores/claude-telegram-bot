@@ -110,3 +110,32 @@ test("SerialChain runs jobs one at a time, surviving errors", async () => {
   await tick(); await tick(); await tick();
   expect(ran).toEqual(["first", "third"]);
 });
+
+test("ChatQueues.idle resolves only after all queued jobs finish", async () => {
+  const q = new ChatQueues();
+  const ran: string[] = [];
+  const g = gate();
+  q.enqueue(1, async () => { await g.p; ran.push("a"); });
+  q.enqueue(2, async () => { ran.push("b"); });
+  let idle = false;
+  void q.idle().then(() => { idle = true; });
+  await tick();
+  expect(idle).toBe(false); // chat 1 still gated
+  g.open();
+  await tick(); await tick();
+  expect(idle).toBe(true);
+  expect(ran.sort()).toEqual(["a", "b"]);
+});
+
+test("SerialChain.idle resolves after the tail job", async () => {
+  const c = new SerialChain();
+  const g = gate();
+  let idle = false;
+  c.enqueue(async () => { await g.p; });
+  void c.idle().then(() => { idle = true; });
+  await tick();
+  expect(idle).toBe(false);
+  g.open();
+  await tick(); await tick();
+  expect(idle).toBe(true);
+});

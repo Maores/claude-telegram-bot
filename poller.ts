@@ -997,27 +997,46 @@ async function handleMessage(msg: TgMessage) {
   }
 }
 
-/** Inline-button presses. ACK fast, allowlist-check, then route by namespace. */
+/** Inline-button presses. ACK fast (with a toast when the press is stale),
+ *  allowlist-check, then route by namespace. Every press logs one [CB] line —
+ *  silent dead buttons cost a forensic hunt on 2026-06-12. */
 async function handleCallback(cq: NonNullable<TgUpdate["callback_query"]>) {
-  // Always ACK — otherwise Telegram shows a spinner on the button for minutes.
-  await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
-  if (!loadAllowList().has(String(cq.from.id))) return;
+  const parsed = parseFuCallback(cq.data ?? "");
+  console.log(`[CB] ${parsed ? `${parsed.action}:${parsed.id}` : `?:${(cq.data ?? "").slice(0, 24)}`} from ${cq.from.id}`);
+  const ack = (text?: string) =>
+    tg("answerCallbackQuery", { callback_query_id: cq.id, ...(text ? { text } : {}) }).catch(() => {});
+  if (!loadAllowList().has(String(cq.from.id))) {
+    await ack();
+    return;
+  }
   const chatId = cq.message?.chat.id;
   const messageId = cq.message?.message_id;
-  const parsed = parseFuCallback(cq.data ?? "");
-  if (!parsed || chatId == null || messageId == null) return; // unknown namespace — ignore
+  if (!parsed || chatId == null || messageId == null) {
+    await ack(); // unknown namespace — ignore
+    return;
+  }
 
   const nowS = Math.floor(Date.now() / 1000);
   if (parsed.action === "done") {
     const f = resolveFollowup(parsed.id, "done");
-    if (!f) return; // already resolved — the ACK is enough
+    if (!f) {
+      console.log(`[CB] stale ${parsed.id} (done)`);
+      await ack("הכפתור הזה כבר טופל");
+      return;
+    }
+    await ack();
     await tg("editMessageText", {
       chat_id: chatId,
       message_id: messageId,
       text: `${cq.message?.text ?? `⏰ ${f.text}`} — ✓ בוצע`,
     }).catch(() => {});
   } else if (parsed.action === "later") {
-    if (getFollowup(parsed.id)?.status !== "pending") return;
+    if (getFollowup(parsed.id)?.status !== "pending") {
+      console.log(`[CB] stale ${parsed.id} (later)`);
+      await ack("הכפתור הזה כבר טופל");
+      return;
+    }
+    await ack();
     await tg("editMessageReplyMarkup", {
       chat_id: chatId,
       message_id: messageId,
@@ -1025,7 +1044,12 @@ async function handleCallback(cq: NonNullable<TgUpdate["callback_query"]>) {
     }).catch(() => {});
   } else {
     const f = resolveFollowup(parsed.id, "snoozed");
-    if (!f) return;
+    if (!f) {
+      console.log(`[CB] stale ${parsed.id} (${parsed.action})`);
+      await ack("הכפתור הזה כבר טופל");
+      return;
+    }
+    await ack();
     const t = snoozeTarget(parsed.action, nowS);
     addOnce(f.chatId, t, f.text);
     await tg("editMessageText", {

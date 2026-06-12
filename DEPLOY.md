@@ -251,6 +251,8 @@ Environment=PATH=/home/claudebot/.bun/bin:/home/claudebot/.local/bin:/usr/local/
 ExecStart=/home/claudebot/.bun/bin/bun run poller.ts
 Restart=always
 RestartSec=5
+KillMode=mixed
+TimeoutStopSec=90
 
 [Install]
 WantedBy=multi-user.target
@@ -262,6 +264,22 @@ sudo systemctl enable --now telegram-agent
 (No memory limits on purpose: claude child processes need the 1 GB box's
 headroom; the `.env` must stay plain `KEY=VALUE` lines — systemd parses it
 directly, no shell quoting.)
+
+`KillMode=mixed` means SIGTERM goes only to the poller process (bun), not to
+claude child processes that are already running — they keep going during the
+drain window. `TimeoutStopSec=90` gives the poller 90 seconds before systemd
+sends SIGKILL. The poller drains within 80 seconds (`GRACE_MS`), so under
+normal load it exits cleanly well before that deadline. A deploy's journal will
+show:
+
+```
+[BOT] SIGTERM — draining queues before exit
+[BOT] drained — exiting
+```
+
+This prevents consumed-but-unprocessed updates from being lost on restart —
+the offset is saved the moment updates are fetched, so anything enqueued but
+not yet handled would otherwise be silently dropped.
 
 Check it:
 

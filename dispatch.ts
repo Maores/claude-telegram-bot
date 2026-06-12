@@ -72,6 +72,12 @@ export class ChatQueues {
   pending(chatId: number): number {
     return this.queued.get(chatId) ?? 0;
   }
+
+  /** Resolves when every job queued so far, in every chat, has finished.
+   *  (Graceful-shutdown drain — a deploy restart must not eat queued turns.) */
+  idle(): Promise<void> {
+    return Promise.all([...this.tails.values()]).then(() => {});
+  }
 }
 
 /** One global FIFO for callback queries: each handler ACKs in <1 s, and
@@ -86,5 +92,10 @@ export class SerialChain {
     this.tail = this.tail
       .then(job)
       .catch((e: any) => console.error(`[ERR] callback chain: ${e?.message ?? e}`));
+  }
+
+  /** Resolves when the chain has run dry (every job enqueued so far). */
+  idle(): Promise<void> {
+    return this.tail.then(() => {});
   }
 }

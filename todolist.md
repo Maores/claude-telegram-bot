@@ -22,6 +22,12 @@ Tracker for the Claude Telegram agent — features, bugs, and things to notice.
   - [x] Fixed a timezone bug found during Phase 3 testing: the old `date -u -d '<local>'` idiom in
     CLAUDE.md parsed the input as UTC (events landed 3h off). Switched to the offset form
     `date -d '<local>' +%Y-%m-%dT%H:%M:%S%:z` and added `toUtcZ()` so `listEvents` normalizes any input.
+  - [x] Fixed the all-day edit day-shift (2026-06-12, PR #22, found by the tasks-feature review):
+    node-ical parses `VALUE=DATE` at local midnight while `buildVEvent` re-emits via UTC-getter
+    `fmtDate`, so every chat edit of an all-day event moved it one day back. `parseEvents` now
+    normalizes all-day start/end to UTC midnight (the tasks.ts pattern) and `fmtEvent` renders
+    all-day days via UTC getters. Live-verified with a create→edit→delete arc on a throwaway event.
+    (Masked locally: Bun forces TZ=UTC in tests on Windows.)
 
 ## Done (media input)
 - [x] **Photo & document understanding** — send a photo or document (PDF, etc.) → it's downloaded from
@@ -46,10 +52,14 @@ Picked from the feature brainstorm. Numbered = urgency order within each group (
    Needs an embeddings source (small local model or an embedding API; the claude CLI doesn't expose embeddings).
 2. [ ] SQLite migration — move history + reminders + dedupe state from JSON to SQLite (schema + migrations;
    removes the reminders.json write race; foundation for RAG + metrics).
-3. [ ] Natural-language task list — bot-managed to-dos (add/list/complete/snooze). FEASIBILITY CONFIRMED
-   (2026-06-08): write to the real Apple Reminders list ("תזכורות", a `VTODO` collection) over the same
-   iCloud CalDAV as the calendar, so tasks sync to the iPhone (no silo). Mirrors the calendar plumbing
-   (a `buildVTodo` + create/update/delete). Build the iCloud variant, not a bot-local file. ~M.
+3. [x] Natural-language task list — SHIPPED 2026-06-12 (PR #21), deployed + live-verified on the droplet
+   (full add→snooze→edit→done→delete arc against the real "תזכורות" list; tasks sync to the iPhone over
+   the calendar's iCloud CalDAV — feasibility confirmed 2026-06-08 held up). `tasks.ts` + `todo.ts`
+   mirror the calendar pair; routing: timed "remind me" stays a Telegram ping, task/list phrasing →
+   Apple Reminders; only delete is confirm-gated. Gotchas recorded in spec/plan/memory: tsdav's
+   VEVENT-only default fetch filter (VTODO needs an explicit comp-filter), no timeRange on todo fetches
+   (RFC 4791 drops DUE-less todos), node-ical crash on RRULE-without-DTSTART (Apple's recurring shape),
+   and VALUE=DATE local-midnight normalization — the same bug then found and fixed in calendar.ts (PR #22).
 
 ### Production maturity (engineering signal)
 1. [ ] Security hardening — ufw, fail2ban, secrets out of plaintext, prompt-injection test suite for the
@@ -119,6 +129,9 @@ chat) and the bot escalates to **Opus** only on explicit/heuristic signals — `
   if the detected language is outside `VOICE_LANGS` (default `he,en` — so English notes stay untouched),
   ONE re-transcription runs with the primary language forced. Handles both name- and code-style
   `language` fields ("arabic"/"ar"); never loops.
+- [ ] Bot task edits rebuild the VTODO and would drop VALARM alert blocks (alerts set on the iPhone).
+  Census 2026-06-12: zero VALARM among current reminders, so theoretical for now — if Maor starts using
+  alert times, carry VALARM blocks through the rebuild (small; noted in PR #21's known limitations).
 - [ ] Telegram replies are plain text only (no Markdown rendering) — possible future polish.
 - [ ] Calendar writes are gated only by the bot's confirm-before-write instruction in CLAUDE.md, not
   enforced in code (fine for a single-user bot). Editing a recurring event is refused; deleting a

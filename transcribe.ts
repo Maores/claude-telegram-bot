@@ -99,6 +99,39 @@ export function parseLocalOutput(stdout: string): Transcript {
 const GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 export const GROQ_STT_MODEL = process.env.GROQ_STT_MODEL || "whisper-large-v3-turbo";
 
+/** Languages voice notes are expected in (VOICE_LANGS env, CSV of ISO codes).
+ *  The FIRST entry is what an off-list detection gets re-forced to. */
+export function parseVoiceLangs(raw: string | undefined): string[] {
+  const list = (raw ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return list.length ? list : ["he", "en"];
+}
+export const VOICE_LANGS = parseVoiceLangs(process.env.VOICE_LANGS);
+
+/** whisper's verbose_json `language` is an English name ("hebrew") on some
+ *  backends and an ISO code ("he") on others — normalize the ones we expect;
+ *  unknown values pass through raw (they won't match VOICE_LANGS, which is
+ *  exactly when the guard should fire). */
+const LANG_NAME_TO_CODE: Record<string, string> = {
+  hebrew: "he",
+  english: "en",
+  arabic: "ar",
+  russian: "ru",
+  yiddish: "yi",
+  spanish: "es",
+  french: "fr",
+  german: "de",
+  amharic: "am",
+};
+export function normalizeLang(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toLowerCase();
+  if (!v) return null;
+  return LANG_NAME_TO_CODE[v] ?? v;
+}
+
 /** One multipart POST to Groq's OpenAI-compatible transcription endpoint.
  *  The Telegram .oga (ogg/opus) uploads as-is — no ffmpeg on this path.
  *  Retries exactly once on network errors and 5xx; 4xx is the caller's
@@ -110,12 +143,14 @@ export async function groqTranscribe(
     model?: string;
     timeoutMs?: number;
     fetchFn?: typeof fetch;
+    allowedLangs?: string[];
   } = {},
 ): Promise<Transcript> {
   const apiKey = opts.apiKey ?? process.env.GROQ_API_KEY ?? "";
   if (!apiKey) throw new Error("GROQ_API_KEY is not set");
   const fetchFn = opts.fetchFn ?? fetch;
   const timeoutMs = opts.timeoutMs ?? VOICE_TIMEOUT_MS;
+  const allowed = opts.allowedLangs ?? VOICE_LANGS;
 
   // Read eagerly into a named File: Groq validates by the uploaded filename's
   // extension and rejects Telegram's .oga (same ogg/opus container) — live 400
@@ -127,54 +162,79 @@ export async function groqTranscribe(
     type: "audio/ogg",
   });
 
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    // Rebuilt per attempt — a FormData body may not be reusable after a send.
-    const form = new FormData();
-    form.append("file", audio);
-    form.append("model", opts.model ?? GROQ_STT_MODEL);
-    form.append("response_format", "verbose_json");
-    // 4xx and malformed-body errors are final; network/abort errors retry once.
-    // The flag (not a message match) decides, so an error thrown mid-body-read
-    // can never be misclassified as retryable.
-    let final = false;
-    try {
-      const res = await fetchFn(GROQ_STT_URL, {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}` },
-        body: form,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (res.status >= 500) {
-        lastErr = new Error(`groq HTTP ${res.status}`);
-        continue; // retry once on server errors
-      }
-      if (!res.ok) {
-        final = true;
-        let body = "(body unreadable)";
-        try {
-          body = (await res.text()).slice(0, 200);
-        } catch {}
-        throw new Error(`groq HTTP ${res.status}: ${body}`);
-      }
-      let data: any;
+  /** One auto-detect or forced-language transcription pass, with the existing
+   *  retry-once-on-network/5xx semantics. */
+  const requestWithRetry = async (
+    forceLang?: string,
+  ): Promise<{ text: string; confidence: number | null; lang: string | null }> => {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // Rebuilt per attempt — a FormData body may not be reusable after a send.
+      const form = new FormData();
+      form.append("file", audio);
+      form.append("model", opts.model ?? GROQ_STT_MODEL);
+      form.append("response_format", "verbose_json");
+      if (forceLang) form.append("language", forceLang);
+      // 4xx and malformed-body errors are final; network/abort errors retry once.
+      // The flag (not a message match) decides, so an error thrown mid-body-read
+      // can never be misclassified as retryable.
+      let final = false;
       try {
-        data = await res.json();
-      } catch {
-        final = true;
-        throw new Error("groq returned a malformed body");
+        const res = await fetchFn(GROQ_STT_URL, {
+          method: "POST",
+          headers: { authorization: `Bearer ${apiKey}` },
+          body: form,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (res.status >= 500) {
+          lastErr = new Error(`groq HTTP ${res.status}`);
+          continue; // retry once on server errors
+        }
+        if (!res.ok) {
+          final = true;
+          let body = "(body unreadable)";
+          try {
+            body = (await res.text()).slice(0, 200);
+          } catch {}
+          throw new Error(`groq HTTP ${res.status}: ${body}`);
+        }
+        let data: any;
+        try {
+          data = await res.json();
+        } catch {
+          final = true;
+          throw new Error("groq returned a malformed body");
+        }
+        if (typeof data?.text !== "string") {
+          final = true;
+          throw new Error("groq response has no text field");
+        }
+        return {
+          text: data.text.trim(),
+          confidence: deriveConfidence(data.segments),
+          lang: normalizeLang(data.language),
+        };
+      } catch (e: any) {
+        if (final) throw e;
+        lastErr = e;
       }
-      if (typeof data?.text !== "string") {
-        final = true;
-        throw new Error("groq response has no text field");
-      }
-      return { text: data.text.trim(), confidence: deriveConfidence(data.segments) };
-    } catch (e: any) {
-      if (final) throw e;
-      lastErr = e;
     }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  };
+
+  const first = await requestWithRetry();
+  // Whisper occasionally tags a Hebrew note as Arabic (live report 2026-06-12)
+  // and the agent then answers in the wrong language. When the detected
+  // language is outside VOICE_LANGS, re-transcribe ONCE forcing the primary
+  // language; allowed detections (and absent language fields) pass untouched.
+  if (first.lang && allowed.length && !allowed.includes(first.lang)) {
+    console.log(
+      `[VOICE] detected "${first.lang}" not in [${allowed.join(",")}] — re-transcribing as "${allowed[0]}"`,
+    );
+    const forced = await requestWithRetry(allowed[0]);
+    return { text: forced.text, confidence: forced.confidence };
   }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  return { text: first.text, confidence: first.confidence };
 }
 
 /** Replace every {input} in the template with the single-quoted path. The

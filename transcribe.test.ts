@@ -348,3 +348,73 @@ test("transcribeVoice dispatches to groq when a key is configured", async () => 
   const tr = await transcribeVoice(AUDIO_TMP, { GROQ_API_KEY: "k" }, { fetchFn });
   expect(tr.text).toBe("hey");
 });
+
+// --- language guard: Hebrew misdetected as Arabic (bug report 2026-06-12) -----
+
+import { parseVoiceLangs, normalizeLang } from "./transcribe";
+
+test("parseVoiceLangs: default he,en; trims+lowercases; empty falls back", () => {
+  expect(parseVoiceLangs(undefined)).toEqual(["he", "en"]);
+  expect(parseVoiceLangs(" He , EN ,")).toEqual(["he", "en"]);
+  expect(parseVoiceLangs("ru")).toEqual(["ru"]);
+  expect(parseVoiceLangs("  ")).toEqual(["he", "en"]);
+});
+
+test("normalizeLang maps whisper names, passes codes/unknowns through, nulls junk", () => {
+  expect(normalizeLang("Hebrew")).toBe("he");
+  expect(normalizeLang("arabic")).toBe("ar");
+  expect(normalizeLang("he")).toBe("he");
+  expect(normalizeLang("klingon")).toBe("klingon"); // unmatched → won't be in allowed → guard fires
+  expect(normalizeLang("")).toBeNull();
+  expect(normalizeLang(undefined)).toBeNull();
+});
+
+test("groqTranscribe re-transcribes ONCE with forced language on unexpected detection", async () => {
+  const forms: FormData[] = [];
+  const fetchFn = (async (_url: any, init: any) => {
+    forms.push(init.body as FormData);
+    if (forms.length === 1) {
+      return groqOk({ text: "نص", language: "arabic", segments: [{ avg_logprob: Math.log(0.5), start: 0, end: 2 }] });
+    }
+    return groqOk({ text: "טקסט עברי תקין", language: "hebrew", segments: [{ avg_logprob: Math.log(0.9), start: 0, end: 2 }] });
+  }) as typeof fetch;
+
+  const tr = await groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn, allowedLangs: ["he", "en"] });
+  expect(forms.length).toBe(2);
+  expect(forms[0].get("language")).toBeNull(); // first pass auto-detects
+  expect(forms[1].get("language")).toBe("he"); // guard forces the primary language
+  expect(tr.text).toBe("טקסט עברי תקין");
+  expect(tr.confidence).toBeCloseTo(0.9, 5);
+});
+
+test("groqTranscribe accepts allowed detections with a single call", async () => {
+  let calls = 0;
+  const fetchFn = (async () => {
+    calls++;
+    return groqOk({ text: "hello", language: "english" });
+  }) as typeof fetch;
+  const tr = await groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn, allowedLangs: ["he", "en"] });
+  expect(calls).toBe(1);
+  expect(tr.text).toBe("hello");
+});
+
+test("groqTranscribe tolerates a missing language field (single call)", async () => {
+  let calls = 0;
+  const fetchFn = (async () => {
+    calls++;
+    return groqOk({ text: "hi" });
+  }) as typeof fetch;
+  await groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn, allowedLangs: ["he", "en"] });
+  expect(calls).toBe(1);
+});
+
+test("the forced retry's result is final even if still off-language (no loops)", async () => {
+  let calls = 0;
+  const fetchFn = (async () => {
+    calls++;
+    return groqOk({ text: "??", language: "arabic" });
+  }) as typeof fetch;
+  const tr = await groqTranscribe(AUDIO_TMP, { apiKey: "k", fetchFn, allowedLangs: ["he"] });
+  expect(calls).toBe(2); // exactly one guard retry, never more
+  expect(tr.text).toBe("??");
+});

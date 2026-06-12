@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { openDb, initSchema, insertMessage, recentMessages, sanitizeFtsQuery, searchMessages, renderRecall, importHistoryJson } from "./db";
+import { openDb, initSchema, insertMessage, recentMessages, sanitizeFtsQuery, searchMessages, renderRecall, importHistoryJson, searchHistory, contextAround } from "./db";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
@@ -250,4 +250,53 @@ describe("phase 2 schema", () => {
     expect(db.query("SELECT rowid FROM memory_fts WHERE memory_fts MATCH 'espresso'").get()).toBeNull();
     db.close();
   });
+});
+
+// --- searchHistory: deliberate cross-history digging (history.ts CLI) ---------
+
+test("searchHistory ranks matches across all chats and respects limit", () => {
+  const db = openDb(":memory:");
+  insertMessage(db, { chatId: 1, role: "user", content: "החלטנו לקנות מזגן חדש לסלון", ts: 1_700_000_000, model: "sonnet" });
+  insertMessage(db, { chatId: 2, role: "assistant", content: "המזגן הוזמן", ts: 1_700_000_100, model: "sonnet" });
+  insertMessage(db, { chatId: 1, role: "user", content: "something unrelated", ts: 1_700_000_200, model: "sonnet" });
+  const hits = searchHistory(db, "מזגן", {});
+  expect(hits.length).toBe(2);
+  expect(hits.every((h) => h.content.includes("מזגן"))).toBe(true);
+  expect(searchHistory(db, "מזגן", { limit: 1 }).length).toBe(1);
+});
+
+test("searchHistory filters by chat and by days", () => {
+  const db = openDb(":memory:");
+  const now = 2_000_000_000;
+  insertMessage(db, { chatId: 1, role: "user", content: "old banana fact", ts: now - 10 * 86_400, model: "sonnet" });
+  insertMessage(db, { chatId: 2, role: "user", content: "fresh banana news", ts: now - 86_400, model: "sonnet" });
+  expect(searchHistory(db, "banana", { chatId: 2 }).length).toBe(1);
+  expect(searchHistory(db, "banana", { days: 3, now }).length).toBe(1);
+  expect(searchHistory(db, "banana", { days: 30, now }).length).toBe(2);
+});
+
+test("searchHistory returns [] on empty/garbage queries instead of throwing", () => {
+  const db = openDb(":memory:");
+  expect(searchHistory(db, "", {})).toEqual([]);
+  expect(searchHistory(db, '"*()', {})).toEqual([]);
+});
+
+test("contextAround returns the surrounding rows of the SAME chat in order", () => {
+  const db = openDb(":memory:");
+  for (let i = 0; i < 10; i++) {
+    insertMessage(db, { chatId: 1, role: i % 2 ? "assistant" : "user", content: `c1 msg ${i}`, ts: 1_700_000_000 + i, model: "sonnet" });
+    insertMessage(db, { chatId: 2, role: "user", content: `c2 noise ${i}`, ts: 1_700_000_000 + i, model: "sonnet" });
+  }
+  const all = recentMessages(db, 1, 10);
+  const target = all[5]; // some mid-conversation row of chat 1
+  const ctx = contextAround(db, target.id, 2);
+  expect(ctx.length).toBe(5); // 2 before + target + 2 after
+  expect(ctx.map((r) => r.id)).toEqual([...ctx.map((r) => r.id)].sort((a, b) => a - b)); // chronological
+  expect(ctx.every((r) => r.content.startsWith("c1"))).toBe(true); // never leaks other chats
+  expect(ctx.some((r) => r.id === target.id)).toBe(true);
+});
+
+test("contextAround of an unknown id returns []", () => {
+  const db = openDb(":memory:");
+  expect(contextAround(db, 999, 4)).toEqual([]);
 });

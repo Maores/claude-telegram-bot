@@ -215,6 +215,95 @@ export function searchMessages(
   }
 }
 
+export interface HistoryHit extends MessageRow {
+  chatId: number;
+  model: string | null;
+  rank: number;
+}
+
+/**
+ * Expand a sanitized FTS match expression so that Hebrew tokens also match
+ * their prefixed forms (definite article ה, conjunction ו, prepositions ב ל מ
+ * ש כ). The unicode61 tokenizer treats attached prefixes as one token, so
+ * "מזגן" would otherwise miss "המזגן". Non-Hebrew tokens are passed through.
+ */
+function expandHebrewPrefixes(sanitized: string): string {
+  const PREFIXES = ["ה", "ו", "ב", "ל", "מ", "ש", "כ"];
+  const HAS_HEBREW = /[א-ת]/;
+  return sanitized.replace(/"([^"]+)"/g, (match, token) => {
+    if (!HAS_HEBREW.test(token)) return match;
+    const variants = PREFIXES.map((p) => `"${p}${token}"`).join(" OR ");
+    return `(${match} OR ${variants})`;
+  });
+}
+
+/**
+ * Deliberate history digging for the history.ts CLI: bm25-ranked FTS over ALL
+ * messages (recall's searchMessages is per-chat and window-bounded; this one
+ * is the "what did we decide about X?" archive search). Optional chat / days
+ * filters. [] on empty query or FTS error — digging must never crash the CLI.
+ */
+export function searchHistory(
+  db: Database,
+  query: string,
+  opts: { chatId?: number; days?: number; limit?: number; now?: number } = {},
+): HistoryHit[] {
+  const sanitized = sanitizeFtsQuery(query);
+  if (!sanitized) return [];
+  const match = expandHebrewPrefixes(sanitized);
+  const limit = opts.limit ?? 8;
+  const conds: string[] = ["messages_fts MATCH ?"];
+  const params: (string | number)[] = [match];
+  if (opts.chatId != null) {
+    conds.push("m.chat_id = ?");
+    params.push(opts.chatId);
+  }
+  if (opts.days != null) {
+    const now = opts.now ?? Math.floor(Date.now() / 1000);
+    conds.push("m.ts >= ?");
+    params.push(now - opts.days * 86_400);
+  }
+  params.push(limit);
+  try {
+    return db
+      .query(
+        `SELECT m.id, m.role, m.content, m.ts, m.chat_id AS chatId, m.model, rank
+           FROM messages_fts
+           JOIN messages m ON m.id = messages_fts.rowid
+          WHERE ${conds.join(" AND ")}
+          ORDER BY rank
+          LIMIT ?`,
+      )
+      .all(...params) as HistoryHit[];
+  } catch {
+    return [];
+  }
+}
+
+/** The n rows before/after a message WITHIN ITS CHAT, chronological, target
+ *  included. [] when the id doesn't exist. */
+export function contextAround(db: Database, id: number, around = 4): MessageRow[] {
+  const targetRow = db
+    .query(`SELECT id, chat_id, role, content, ts FROM messages WHERE id = ?`)
+    .get(id) as { id: number; chat_id: number; role: "user" | "assistant"; content: string; ts: number } | null;
+  if (!targetRow) return [];
+  const chatId = targetRow.chat_id;
+  const target: MessageRow = { id: targetRow.id, role: targetRow.role, content: targetRow.content, ts: targetRow.ts };
+  const before = db
+    .query(
+      `SELECT id, role, content, ts
+         FROM messages WHERE chat_id = ? AND id < ? ORDER BY id DESC LIMIT ?`,
+    )
+    .all(chatId, id, around) as MessageRow[];
+  const after = db
+    .query(
+      `SELECT id, role, content, ts
+         FROM messages WHERE chat_id = ? AND id > ? ORDER BY id ASC LIMIT ?`,
+    )
+    .all(chatId, id, around) as MessageRow[];
+  return [...before.reverse(), target, ...after];
+}
+
 const RECALL_SNIPPET_MAX = 300;
 
 function fmtDate(ts: number): string {

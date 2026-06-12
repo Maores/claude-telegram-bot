@@ -138,6 +138,16 @@ skill so you can follow it consistently in future sessions:
 - Save FACTS in memory (`mem.ts`), save PROCEDURES as skills (`skill.ts`). Do NOT
   save one-off task narratives or "tool X is broken" notes as skills.
 
+## History search (deliberate digging)
+Automatic recall injects a few relevant past messages each turn. When Maor asks
+"מה אמרנו על X?" / "what did we decide about Y?" and the recalled context above
+doesn't already answer it, dig deliberately:
+- `bun run history.ts search "<query>" [--chat <id>] [--days <n>] [--limit <k>]`
+  — bm25 search over the whole archive; each hit starts with its message id.
+- `bun run history.ts context <id> [--around <n>]` — the conversation around a
+  hit, chronologically.
+Quote what you found (with its date) rather than guessing from memory.
+
 ## Context
 - Running on a DigitalOcean VPS.
 - User: Maor.

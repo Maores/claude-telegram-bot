@@ -115,14 +115,16 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /** One human line, e.g. "☐ Pay rent — Mon 15/06 09:00 🔁 (תזכורות)".
- *  Local getters — the server clock is Asia/Jerusalem, and node-ical builds
- *  date-only dates at local midnight. */
+ *  Timed dues show server-local time (Asia/Jerusalem). Date-only dues are
+ *  UTC midnight (normalized in parseTodos), so they render via UTC getters —
+ *  correct on any machine regardless of its offset. */
 export function fmtTask(t: TaskItem): string {
   let s = `${t.done ? "☑" : "☐"} ${t.title}`;
   if (t.due) {
     const d = t.due;
-    s += ` — ${DAYS[d.getDay()]} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
-    if (!t.dueDateOnly) s += ` ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    s += t.dueDateOnly
+      ? ` — ${DAYS[d.getUTCDay()]} ${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}`
+      : ` — ${DAYS[d.getDay()]} ${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
   if (t.recurring) s += " 🔁";
   if (t.list) s += ` (${t.list})`;

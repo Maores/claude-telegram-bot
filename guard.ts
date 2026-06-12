@@ -151,5 +151,11 @@ export function checkAutoSession(toolName: string, command: string | undefined):
   if (toolName === "Bash" && command && /\bconfirm\.ts\s+approve\b/i.test(command)) {
     return { verdict: "block", reason: "refused: [AUTO] sessions may not approve pending actions" };
   }
+  if (toolName === "Bash" && command && /\bcal\.ts\s+(add|edit|delete)\b/i.test(command)) {
+    return { verdict: "block", reason: "refused: [AUTO] sessions propose calendar writes via confirm.ts, not directly" };
+  }
+  if (toolName === "Bash" && command && /\btodo\.ts\s+delete\b/i.test(command)) {
+    return { verdict: "block", reason: "refused: [AUTO] sessions propose task deletions via confirm.ts, not directly" };
+  }
   return { verdict: "allow" };
 }

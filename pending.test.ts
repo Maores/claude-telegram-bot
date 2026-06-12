@@ -85,24 +85,26 @@ test("consumeAction: 24h expiry boundary", () => {
   const b = proposeAction(5, "s2", CAL_ADD, newTurnId(), 1000);
   const past = consumeAction(b.id, "approved", 1000 + 24 * 3600 + 1);
   expect(past.outcome).toBe("expired");
-  // expired is terminal: a later tap is stale, not expired again
-  expect(consumeAction(b.id, "approved", 1000 + 24 * 3600 + 2).outcome).toBe("stale");
+  // expired is terminal AND idempotent: a later tap still reports expired
+  expect(consumeAction(b.id, "approved", 1000 + 24 * 3600 + 2).outcome).toBe("expired");
 });
 
 test("pruneActions: drops old resolved entries, expires old pendings, keeps fresh ones", () => {
-  const keep = proposeAction(5, "fresh pending", CAL_ADD, newTurnId(), 1000);
-  const old = proposeAction(5, "old pending", CAL_ADD, newTurnId(), 1000);
+  const nowS = 1000 + 8 * 24 * 3600;
+  // done: very old resolved entry (8 days old) — dropped by prune (>PRUNE_AFTER_S)
   const done = proposeAction(5, "old resolved", CAL_ADD, newTurnId(), 1000);
   consumeAction(done.id, "approved", 1001);
-  // 8 days later: old pending becomes expired (kept), old resolved dropped, fresh... also old.
-  // Use a now where `keep` is still inside expiry: re-propose it late instead.
-  const nowS = 1000 + 8 * 24 * 3600;
+  // old and keep: 2 days old — past EXPIRY_S (24h) so prune flips them to expired,
+  // but within PRUNE_AFTER_S (7 days) so the entry is kept in the file
+  const expiredBase = nowS - 2 * 24 * 3600;
+  const old = proposeAction(5, "old pending", CAL_ADD, newTurnId(), expiredBase);
+  const keep = proposeAction(5, "keep pending", CAL_ADD, newTurnId(), expiredBase);
   const fresh = proposeAction(5, "really fresh", CAL_ADD, newTurnId(), nowS - 10);
   pruneActions(nowS);
   const left = takePending(5, fresh.turnId);
   expect(left.map((p) => p.id)).toEqual([fresh.id]); // only the fresh one is still pending
-  expect(consumeAction(old.id, "approved", nowS).outcome).toBe("stale"); // was expired by prune
-  expect(consumeAction(keep.id, "approved", nowS).outcome).toBe("stale"); // ditto (also >24h old)
+  expect(consumeAction(old.id, "approved", nowS).outcome).toBe("expired"); // was expired by prune
+  expect(consumeAction(keep.id, "approved", nowS).outcome).toBe("expired"); // ditto (also >24h old)
   expect(consumeAction(done.id, "approved", nowS).outcome).toBe("stale"); // dropped entirely
 });
 

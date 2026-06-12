@@ -123,7 +123,12 @@ export function consumeAction(id: string, to: "approved" | "cancelled", nowS: nu
   return withFileLock(pendingPath(), () => {
     const list = loadActions();
     const a = list.find((x) => x.id === id);
-    if (!a || a.status !== "pending") return { outcome: "stale" } as const;
+    if (!a) return { outcome: "stale" } as const;
+    // pruneActions may have flipped it to expired already — that's terminal
+    // and idempotent: every later tap still reports expired, never "stale"
+    // (which would read as "already executed").
+    if (a.status === "expired") return { outcome: "expired" } as const;
+    if (a.status !== "pending") return { outcome: "stale" } as const;
     if (nowS - a.createdAt > EXPIRY_S) {
       a.status = "expired";
       saveActions(list);

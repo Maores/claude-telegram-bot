@@ -974,7 +974,7 @@ async function handleMessage(msg: TgMessage) {
         chatId,
         placeholderId,
         model,
-        { ...baseOpts, env: { ...(baseOpts.env ?? {}), TELEGRAM_TURN_ID: turnId } },
+        { ...baseOpts, env: { TELEGRAM_TURN_ID: turnId } },
       )).trim() || "(no output)";
 
     const now = Math.floor(Date.now() / 1000);
@@ -1128,6 +1128,7 @@ async function handlePaCallback(
   if (r.outcome === "stale") {
     console.log(`[PA] stale ${parsed.id}`);
     await ack("הכפתור הזה כבר טופל");
+    await tg("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
     return;
   }
   if (r.outcome === "expired") {
@@ -1137,6 +1138,12 @@ async function handlePaCallback(
     return;
   }
   const a = r.action;
+  if (a.chatId !== chatId) {
+    // Forged/cross-chat callback_data: consume but never execute (fail-safe).
+    console.error(`[PA] chat mismatch ${a.id}: entry ${a.chatId} vs tap ${chatId}`);
+    await ack("הכפתור הזה כבר טופל");
+    return;
+  }
   if (parsed.action === "no") {
     await ack();
     await tg("editMessageText", { chat_id: chatId, message_id: messageId, text: `✗ בוטל — ${a.summary}` }).catch(() => {});
@@ -1152,22 +1159,27 @@ async function handlePaCallback(
     return;
   }
   await ack();
-  const proc = Bun.spawn(a.argv, { cwd: PROJECT_DIR, stdout: "pipe", stderr: "pipe" });
-  const killer = setTimeout(() => {
-    try {
-      proc.kill();
-    } catch {}
-  }, 30_000);
-  const [out, err, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  clearTimeout(killer);
-  const firstLine = (code === 0 ? out : err || out).trim().split("\n")[0] ?? "";
-  const text = code === 0 ? `✓ ${a.summary}\n${firstLine}` : `⚠️ נכשל — ${a.summary}\n${firstLine}`;
-  await tg("editMessageText", { chat_id: chatId, message_id: messageId, text }).catch(() => {});
-  console.log(redact(`[PA] ${code === 0 ? "executed" : "FAILED"} ${a.id}: ${firstLine}`));
+  // Detached: a slow CalDAV write must not block the callback chain (its <2s
+  // job contract keeps every other button instant — see SerialChain). The
+  // once-only consumption above already guarantees this runs at most once.
+  void (async () => {
+    const proc = Bun.spawn(a.argv, { cwd: PROJECT_DIR, stdout: "pipe", stderr: "pipe" });
+    const killer = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {}
+    }, 30_000);
+    const [out, err, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    clearTimeout(killer);
+    const firstLine = (code === 0 ? out : err || out).trim().split("\n")[0] ?? "";
+    const text = code === 0 ? `✓ ${a.summary}\n${firstLine}` : `⚠️ נכשל — ${a.summary}\n${firstLine}`;
+    await tg("editMessageText", { chat_id: chatId, message_id: messageId, text }).catch(() => {});
+    console.log(redact(`[PA] ${code === 0 ? "executed" : "FAILED"} ${a.id}: ${firstLine}`));
+  })().catch((e: any) => console.error(`[ERR] pa exec ${a.id}: ${e?.message ?? e}`));
 }
 
 /** /stop at dispatch level: kill the running child AND drop that chat's

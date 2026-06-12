@@ -80,7 +80,7 @@ try {
     const v = validateArgv(argv);
     if (!v.ok) throw new Error(`that command can't be registered — ${v.reason}`);
     const turnId = process.env.TELEGRAM_TURN_ID ?? newTurnId();
-    const a = proposeAction(envChat(), summary, argv as string[], turnId, nowS());
+    const a = proposeAction(envChat(), summary.slice(0, 300), argv as string[], turnId, nowS());
     console.log(
       `registered proposal ${a.id} — Maor will get ✓/✗ buttons after your reply. ` +
         `Do NOT run the command yourself; if he approves in text, run: bun run confirm.ts approve ${a.id}`,
@@ -88,6 +88,9 @@ try {
   } else if (cmd === "approve") {
     const id = rest[0];
     if (!id) throw new Error("usage: confirm.ts approve <id>");
+    if (process.env.CLAUDE_AUTO_SESSION === "1") {
+      throw new Error("[AUTO] sessions may not approve pending actions — Maor approves via the buttons");
+    }
     const r = consumeAction(id, "approved", nowS());
     if (r.outcome === "stale") throw new Error("that proposal was already handled (or never existed)");
     if (r.outcome === "expired") throw new Error("that proposal expired (24h) — propose it again");

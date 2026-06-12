@@ -114,7 +114,10 @@ chat) and the bot escalates to **Opus** only on explicit/heuristic signals — `
   cross-process lockfile (`withFileLock` — O_EXCL create, 5s stale-steal, 1.5s timeout then proceed-without,
   so a stuck lock can't brick reminders) around every mutator in `reminders.ts`, both stores. The SQLite
   migration would still supersede this someday.
-- [ ] **תמלול קולי בשפה שגויה** (דווח 2026-06-12) — לפעמים הודעה קולית (עברית) מתומללת כערבית ע"י Whisper, הבוט עונה בשפת התמלול במקום בעברית. צריך: או לאלץ language="he" ב-Groq, או לזהות שפה לא-צפויה ולשאול שנית.
+- [x] **תמלול קולי בשפה שגויה** (דווח 2026-06-12) — FIXED same day (PR #20): whisper auto-detects first;
+  if the detected language is outside `VOICE_LANGS` (default `he,en` — so English notes stay untouched),
+  ONE re-transcription runs with the primary language forced. Handles both name- and code-style
+  `language` fields ("arabic"/"ar"); never loops.
 - [ ] Telegram replies are plain text only (no Markdown rendering) — possible future polish.
 - [ ] Calendar writes are gated only by the bot's confirm-before-write instruction in CLAUDE.md, not
   enforced in code (fine for a single-user bot). Editing a recurring event is refused; deleting a

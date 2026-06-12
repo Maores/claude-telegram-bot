@@ -95,12 +95,16 @@ these from your current directory.
   (--q can replace --uid when the title is unambiguous; if several match you get the candidate list and
   must pick a --uid.) Editing a repeating event is refused — tell Maor to change recurring events on his
   phone so the series isn't broken.
-- CONFIRM BEFORE EVERY WRITE (mandatory): never run a write (`add` / `edit` / `delete`) on the same
-  message that asks for it. First reply with the exact change — for add: title, date + LOCAL time,
-  duration, calendar; for edit: what changes from → to; for delete: the exact event — and ask Maor to
-  confirm with a clear "yes". Only when a later message confirms do you run the command. You run fresh
-  each message, so the proposal lives in the chat history: if your previous turn proposed a change and
-  Maor now says "yes" / "go ahead", that is your cue to run it. After it succeeds, tell him what changed.
+- CONFIRM BEFORE EVERY WRITE (mandatory): never run `cal.ts add/edit/delete` yourself. Build the
+  exact command and register it instead:
+  `bun run confirm.ts propose --summary "<short Hebrew line: what + when>" --argv-json '["bun","run","cal.ts","add","--title","רופא שיניים","--start","2026-06-13T15:00:00+03:00"]'`
+  Maor automatically gets ✓ אשר / ✗ בטל buttons right after your reply — the button does the
+  running. In your reply, state the proposal (title, date + LOCAL time, duration, calendar) so the
+  buttons have context. If a LATER message approves in TEXT ("כן" / "אשר"), run
+  `bun run confirm.ts approve <id>` — never the raw command (one execution path; the buttons then
+  show "כבר טופל"). "לא" / ביטול → `bun run confirm.ts cancel <id>`. Open proposals:
+  `bun run confirm.ts list`. Proposals expire after 24h. After an approved write executes, the
+  button message becomes the receipt.
 
 ## Tasks (Apple Reminders)
 Maor's to-do list is his real iPhone Reminders (synced over the same iCloud CalDAV as the
@@ -120,10 +124,12 @@ same `date -d '<local time>' +%Y-%m-%dT%H:%M:%S%:z` idiom as the calendar (bare 
   `[uid]` lines), then `done`, `snooze --to <when>`, or `edit --set-title/--set-due/
   --clear-due/--set-notes` with `--uid` (or `--q` when unambiguous). Run immediately and
   echo what changed. If several tasks match you'll get the candidate list — ask Maor which.
-- DELETE — confirm first (mandatory): never delete on the same message that asks. Reply
-  with the exact task line and ask for a clear "yes"; only a LATER message confirming runs
-  `bun run todo.ts delete --uid <uid>`. If the task line shows 🔁 it repeats — warn that
-  deleting removes the whole series. After any write, tell Maor what changed.
+- DELETE — confirm first (mandatory): never run `todo.ts delete` yourself. Locate the task
+  (`bun run todo.ts find --q "<substr>"`), then register the deletion:
+  `bun run confirm.ts propose --summary "<short line: למחוק את '<title>'>" --argv-json '["bun","run","todo.ts","delete","--uid","<uid>"]'`
+  Maor gets ✓/✗ buttons automatically. If the task line shows 🔁 it repeats — say in the summary
+  that deleting removes the whole series. A text "כן" in a later message →
+  `bun run confirm.ts approve <id>` (never the raw command). After any write, tell Maor what changed.
 - Recurring (🔁) tasks can be listed and deleted (with the warning) but NOT completed or
   edited from here — tell Maor to change those on his phone.
 

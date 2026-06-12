@@ -199,4 +199,12 @@ describe("checkAutoSession", () => {
   test("still applies the hardline floor inside AUTO sessions", () => {
     expect(checkAutoSession("Bash", "rm -rf /").verdict).toBe("block");
   });
+
+  test("[AUTO] sessions may not approve pending actions, but may propose/cancel/list", () => {
+    expect(checkAutoSession("Bash", "bun run confirm.ts approve pa123").verdict).toBe("block");
+    expect(checkAutoSession("Bash", "cd /x && bun run confirm.ts  approve pa123").verdict).toBe("block");
+    expect(checkAutoSession("Bash", "bun run confirm.ts propose --summary x --argv-json '[]'").verdict).toBe("allow");
+    expect(checkAutoSession("Bash", "bun run confirm.ts cancel pa123").verdict).toBe("allow");
+    expect(checkAutoSession("Bash", "bun run confirm.ts list").verdict).toBe("allow");
+  });
 });

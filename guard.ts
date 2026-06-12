@@ -148,5 +148,8 @@ export function checkAutoSession(toolName: string, command: string | undefined):
   if (toolName === "Bash" && command && /\bremind\.ts\s+add(?:-once|-repeat)?\b/i.test(command)) {
     return { verdict: "block", reason: "refused: [AUTO] sessions may not schedule reminders" };
   }
+  if (toolName === "Bash" && command && /\bconfirm\.ts\s+approve\b/i.test(command)) {
+    return { verdict: "block", reason: "refused: [AUTO] sessions may not approve pending actions" };
+  }
   return { verdict: "allow" };
 }

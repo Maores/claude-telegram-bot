@@ -27,6 +27,8 @@ import { skillsIndexBlock } from "./skills";
 import { redact } from "./redact";
 import { resolveBackend, transcribeVoice, shouldEchoTranscript, VOICE_MAX_SEC } from "./transcribe";
 import { shouldReview, runReview } from "./review";
+import { classifyUpdate, ChatQueues, SerialChain, isStopCommand } from "./dispatch";
+export { isStopCommand }; // poller.test.ts and external users keep their import path
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -197,29 +199,43 @@ const REACTION_FAIL = "👎"; // something went wrong
 /** The bot's @username, learned at startup; used to recognize `/stop@thisbot`. */
 let botUsername = "";
 
-/** Claude child processes in flight, keyed by chat id, so /stop can interrupt
- *  the right run. The poller handles messages one at a time per chat, so a chat
- *  has at most one interactive run; [AUTO] runs may overlap and are killable too. */
-const inFlight = new Map<number, import("bun").Subprocess>();
+/** A claude child currently running for a chat, plus whether /stop killed it
+ *  (so the turn ends with "נעצר ✋" instead of the generic error reply). */
+interface Flight {
+  proc: import("bun").Subprocess;
+  stopped?: boolean;
+}
 
-function registerChild(chatId: number, proc: import("bun").Subprocess) {
-  inFlight.set(chatId, proc);
+/** Claude children in flight, keyed by chat id. The poller runs at most one
+ *  interactive turn per chat (ChatQueues guarantees it); [AUTO] runs may
+ *  overlap and are killable too. */
+const inFlight = new Map<number, Flight>();
+
+function registerChild(chatId: number, proc: import("bun").Subprocess): Flight {
+  const f: Flight = { proc };
+  inFlight.set(chatId, f);
+  return f;
 }
 /** Only clear the slot if it still holds *this* process (avoid a late finisher
  *  wiping a newer run's entry). */
 function unregisterChild(chatId: number, proc: import("bun").Subprocess) {
-  if (inFlight.get(chatId) === proc) inFlight.delete(chatId);
+  if (inFlight.get(chatId)?.proc === proc) inFlight.delete(chatId);
+}
+/** /stop: mark the running child stopped and kill it. True if one existed. */
+function stopChild(chatId: number): boolean {
+  const f = inFlight.get(chatId);
+  if (!f) return false;
+  f.stopped = true;
+  try {
+    f.proc.kill();
+  } catch {}
+  return true;
 }
 
-/** True when `text` is exactly the /stop command (optionally @-mentioning this
- *  bot). Case-insensitive; trims surrounding whitespace. A normal message that
- *  merely contains "/stop" is not a stop command and never interrupts a run. */
-export function isStopCommand(text: string, botUsername: string): boolean {
-  const t = (text ?? "").trim().toLowerCase();
-  if (t === "/stop") return true;
-  if (botUsername && t === `/stop@${botUsername.toLowerCase()}`) return true;
-  return false;
-}
+/** Non-blocking dispatch state (spec 2026-06-11): per-chat message FIFOs and
+ *  the one serialized callback chain. POLL_SERIAL=1 bypasses both. */
+const chatQueues = new ChatQueues();
+const cbChain = new SerialChain();
 
 /** The finishing reaction: 👍 on success, 👎 on failure. */
 export function outcomeReaction(ok: boolean): string {
@@ -566,6 +582,14 @@ class StreamRenderer {
   }
 }
 
+/** Thrown when /stop killed this turn's child — callers end the turn quietly
+ *  ("נעצר ✋" already rendered) instead of sending the generic error reply. */
+export class TurnStopped extends Error {
+  constructor() {
+    super("turn stopped by /stop");
+  }
+}
+
 /** Extra, optional knobs for a single claude -p spawn. Used to put unattended
  *  [AUTO] sessions in least-privilege mode without changing normal messages. */
 export interface SpawnOpts {
@@ -602,7 +626,7 @@ async function streamClaude(
   );
   // Track this child so /stop can interrupt it; clear the slot when it exits,
   // however it exits (normal, error, timeout, or killed by /stop).
-  registerChild(chatId, proc);
+  const flight = registerChild(chatId, proc);
   void proc.exited.finally(() => unregisterChild(chatId, proc));
   const stderrP = new Response(proc.stderr).text().catch(() => "");
   proc.stdin!.write(prompt);
@@ -650,6 +674,11 @@ async function streamClaude(
 
   const code = await proc.exited;
   const final = parser.finalText();
+
+  if (flight.stopped) {
+    await renderer.render(prefix + (final ? final + "\n\n" : "") + "נעצר ✋").catch(() => {});
+    throw new TurnStopped();
+  }
 
   if (timedOut) {
     if (final) {
@@ -715,12 +744,9 @@ async function handleMessage(msg: TgMessage) {
   // and does NOT interrupt a running turn. The receive loop awaits interactive
   // turns sequentially, so in practice this reaches concurrently-running
   // children — an [AUTO] reminder job, or a future non-blocking turn.
+  // Reached only in POLL_SERIAL mode — dispatch intercepts /stop otherwise.
   if (isStopCommand(msg.text ?? "", botUsername)) {
-    const running = inFlight.get(chatId);
-    if (running) {
-      try {
-        running.kill(); // SIGTERM
-      } catch {}
+    if (stopChild(chatId)) {
       await tg("sendMessage", { chat_id: chatId, text: "נעצר ✋" }).catch(() => {});
     } else {
       await tg("sendMessage", { chat_id: chatId, text: "אין כרגע משימה רצה לעצור." }).catch(() => {});
@@ -925,6 +951,19 @@ async function handleMessage(msg: TgMessage) {
       }
     }
   } catch (e: any) {
+    if (e instanceof TurnStopped) {
+      // The stop reply is already rendered; record a quiet history marker so
+      // the next turn's context shows the interruption, and skip 👎 + error.
+      console.log(`[STOP] turn for ${fromId} stopped mid-answer`);
+      try {
+        const db = getDb();
+        const now = Math.floor(Date.now() / 1000);
+        insertMessage(db, { chatId, role: "user", content: historyNote, ts: now, model });
+        insertMessage(db, { chatId, role: "assistant", content: "[stopped]", ts: now, model });
+      } catch {}
+      return;
+    }
+    // …existing error path unchanged…
     console.error(`[ERR] handling message from ${fromId}: ${e?.message ?? e}`);
     void setReaction(chatId, msg.message_id, outcomeReaction(false));
     await sendReply(
@@ -977,6 +1016,23 @@ async function handleCallback(cq: NonNullable<TgUpdate["callback_query"]>) {
     }).catch(() => {});
     console.log(`[REMIND] snoozed fu ${f.id} to ${fmt(t)}`);
   }
+}
+
+/** /stop at dispatch level: kill the running child AND drop that chat's
+ *  queued turns. Instant — never spawns claude, never enters a queue. */
+async function handleStopDispatch(msg: TgMessage) {
+  if (!msg.from || !loadAllowList().has(String(msg.from.id))) {
+    console.log(redact(`[SKIP] unauthorized /stop from ${msg.from?.id ?? "?"}`));
+    return;
+  }
+  const chatId = msg.chat.id;
+  const hadRun = stopChild(chatId);
+  const dropped = chatQueues.drop(chatId);
+  const text =
+    hadRun || dropped
+      ? `נעצר ✋${dropped ? ` (בוטלו גם ${dropped} הודעות שחיכו בתור)` : ""}`
+      : "אין כרגע משימה רצה לעצור.";
+  await tg("sendMessage", { chat_id: chatId, text }).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,6 +1101,10 @@ async function checkReminders() {
       }
       console.log(redact(`[REMIND] fired ${r.id} -> ${r.chatId}: ${r.text}`));
     } catch (e: any) {
+      if (e instanceof TurnStopped) {
+        console.log(`[STOP] [AUTO] run ${r.id} stopped by /stop`);
+        continue;
+      }
       console.error(`[ERR] send reminder ${r.id}: ${e?.message ?? e}`);
     }
   }
@@ -1163,6 +1223,9 @@ async function main() {
     void checkCalendarNudges();
   }, CAL_CHECK_MS);
 
+  const serialMode = process.env.POLL_SERIAL === "1";
+  if (serialMode) console.log("[BOT] POLL_SERIAL=1 — sequential update handling (rollback mode)");
+
   let offset = await initOffset();
 
   while (true) {
@@ -1177,18 +1240,38 @@ async function main() {
 
     for (const u of updates) {
       offset = u.update_id + 1;
-      if (u.message) {
-        try {
-          await handleMessage(u.message);
-        } catch (e: any) {
-          console.error(`[ERR] unhandled: ${e?.message ?? e}`);
+      if (serialMode) {
+        // Rollback mode: today's strictly sequential behavior, verbatim.
+        if (u.message) {
+          try {
+            await handleMessage(u.message);
+          } catch (e: any) {
+            console.error(`[ERR] unhandled: ${e?.message ?? e}`);
+          }
+        } else if (u.callback_query) {
+          try {
+            await handleCallback(u.callback_query);
+          } catch (e: any) {
+            console.error(`[ERR] callback: ${e?.message ?? e}`);
+          }
         }
-      } else if (u.callback_query) {
-        try {
-          await handleCallback(u.callback_query);
-        } catch (e: any) {
-          console.error(`[ERR] callback: ${e?.message ?? e}`);
+        continue;
+      }
+      switch (classifyUpdate(u, botUsername)) {
+        case "callback":
+          // Fire onto the serialized chain — ACK happens inside, instantly.
+          cbChain.enqueue(() => handleCallback(u.callback_query!));
+          break;
+        case "stop":
+          // Instant by design; safe to await (no claude, no queue).
+          await handleStopDispatch(u.message!);
+          break;
+        case "message": {
+          const m = u.message!;
+          chatQueues.enqueue(m.chat.id, () => handleMessage(m));
+          break;
         }
+        // "ignore": nothing — same as today's else-fallthrough.
       }
     }
     if (updates.length) saveOffset(offset);

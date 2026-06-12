@@ -114,10 +114,15 @@ chat) and the bot escalates to **Opus** only on explicit/heuristic signals — `
   cross-process lockfile (`withFileLock` — O_EXCL create, 5s stale-steal, 1.5s timeout then proceed-without,
   so a stuck lock can't brick reminders) around every mutator in `reminders.ts`, both stores. The SQLite
   migration would still supersede this someday.
+- [ ] **תמלול קולי בשפה שגויה** (דווח 2026-06-12) — לפעמים הודעה קולית (עברית) מתומללת כערבית ע"י Whisper, הבוט עונה בשפת התמלול במקום בעברית. צריך: או לאלץ language="he" ב-Groq, או לזהות שפה לא-צפויה ולשאול שנית.
 - [ ] Telegram replies are plain text only (no Markdown rendering) — possible future polish.
 - [ ] Calendar writes are gated only by the bot's confirm-before-write instruction in CLAUDE.md, not
   enforced in code (fine for a single-user bot). Editing a recurring event is refused; deleting a
   recurring master would remove the whole series.
+- [ ] `/stop` with an `[AUTO]` run overlapping an interactive turn (same chat) kills whichever child
+  registered LAST in the single `inFlight` slot — the other keeps running despite the נעצר reply.
+  Pre-existing (predates the non-blocking loop, flagged in its review 2026-06-12); fix = track
+  multiple flights per chat. Rare: needs [AUTO] + interactive at the same instant.
 
 ## Things to notice (deploy/ops gotchas)
 - Deploy to the server with `git fetch origin && git reset --hard origin/main` — a plain `git pull`

@@ -73,7 +73,7 @@ action executes instantly — without spawning a claude session on the tap.
 4. Once-only consumption (atomic, the resolveFollowup pattern) + 24h expiry.
 5. [AUTO] sessions may `propose` (safe automation: a scheduled job can suggest
    a write and Maor wakes up to buttons) but `confirm.ts approve` joins the
-   [AUTO] denylist in guard.ts — unattended runs can never self-approve.
+   [AUTO] denylist in guard.ts — unattended runs can never self-approve. [AUTO] sessions also may not run the confirm-gated writes (cal.ts add/edit/delete, todo.ts delete) directly — propose is their only write channel.
 6. Existing layers still apply: handleCallback's user allowlist, the redactor
    on every outgoing summary, `[CB]` press logging.
 
@@ -90,6 +90,7 @@ explicitly taps it.
   message lives in Telegram); the graceful drain (PR #23) protects the tap.
 - `confirm.ts propose` with invalid argv fails loudly at propose time, so the
   bot can rephrase instead of registering a dud.
+- A tap-execution may run concurrently with a claude turn writing calendar/task state (the callback chain and chat queues are independent) — accepted: CalDAV writes are independent requests, and serializing taps behind turns would forfeit the instant-tap UX.
 
 ## Testing
 - Unit (pure): `validateArgv` accept/reject table (incl. path tricks

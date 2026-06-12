@@ -148,3 +148,73 @@ export function sortTasks<T extends TaskItem>(tasks: T[]): T[] {
       a.title.localeCompare(b.title),
   );
 }
+
+/** Input for building a VTODO. `done` requires `completedAt`. */
+export interface TodoInput {
+  uid: string;
+  title: string;
+  due?: Date;
+  dueDateOnly?: boolean;
+  notes?: string;
+  done?: boolean;
+  completedAt?: Date;
+  dtstamp: Date;
+}
+
+/** Build a complete VCALENDAR/VTODO iCalendar string. Pure — no network.
+ *  Same PRODID + CRLF discipline as buildVEvent. */
+export function buildVTodo(input: TodoInput): string {
+  const { uid, title, due, dueDateOnly, notes, done, completedAt, dtstamp } = input;
+  const lines: string[] = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//maor-telegram-bot//EN",
+    "CALSCALE:GREGORIAN",
+    "BEGIN:VTODO",
+    `UID:${uid}`,
+    `DTSTAMP:${fmtUTC(dtstamp)}`,
+    `SUMMARY:${escapeText(title)}`,
+  ];
+  if (due) {
+    lines.push(dueDateOnly ? `DUE;VALUE=DATE:${fmtDate(due)}` : `DUE:${fmtUTC(due)}`);
+  }
+  if (notes) lines.push(`DESCRIPTION:${escapeText(notes)}`);
+  if (done) {
+    lines.push("STATUS:COMPLETED");
+    if (completedAt) lines.push(`COMPLETED:${fmtUTC(completedAt)}`);
+    lines.push("PERCENT-COMPLETE:100");
+  } else {
+    lines.push("STATUS:NEEDS-ACTION");
+  }
+  lines.push("END:VTODO", "END:VCALENDAR");
+  return lines.join("\r\n") + "\r\n";
+}
+
+export interface TaskPatch {
+  title?: string;
+  /** a Date moves the due; null clears it; undefined leaves it alone */
+  due?: Date | null;
+  dueDateOnly?: boolean;
+  notes?: string;
+  done?: boolean;
+  completedAt?: Date;
+}
+
+/** Merge a patch onto a task's fields, keeping the uid and unset fields. Pure. */
+export function mergeTask(base: TaskItem, patch: TaskPatch, dtstamp: Date): TodoInput {
+  const due = patch.due === null ? undefined : (patch.due ?? base.due);
+  const dueDateOnly =
+    patch.due === null ? undefined
+    : patch.due !== undefined ? (patch.dueDateOnly ?? false) || undefined
+    : base.dueDateOnly;
+  return {
+    uid: base.uid,
+    title: patch.title ?? base.title,
+    due,
+    dueDateOnly,
+    notes: patch.notes ?? base.notes,
+    done: patch.done ?? base.done,
+    completedAt: patch.completedAt ?? base.completedAt,
+    dtstamp,
+  };
+}

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { parseTodos, fmtTask, selectTasks, sortTasks, type TaskItem } from "./tasks";
+import { parseTodos, fmtTask, selectTasks, sortTasks, buildVTodo, mergeTask, type TaskItem } from "./tasks";
 
 const wrap = (body: string) =>
   ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Apple Inc.//iOS 17.0//EN", body, "END:VCALENDAR"].join("\r\n") + "\r\n";
@@ -114,4 +114,91 @@ test("fmtTask: open with timed due, done, recurring, list tag", () => {
   expect(fmtTask(mk({ title: "Renew passport", due: dueOnly, dueDateOnly: true }))).toBe("☐ Renew passport — Sat 20/06");
   expect(fmtTask(mk({ title: "Water plants", recurring: true }))).toBe("☐ Water plants 🔁");
   expect(fmtTask(mk({ title: "Call plumber", done: true, list: "תזכורות" }))).toBe("☑ Call plumber (תזכורות)");
+});
+
+const STAMP = new Date("2026-06-12T08:00:00Z");
+
+test("buildVTodo: minimal open todo, CRLF + trailing CRLF", () => {
+  const ics = buildVTodo({ uid: "u-1", title: "לקנות חלב", dtstamp: STAMP });
+  expect(ics).toBe(
+    [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//maor-telegram-bot//EN",
+      "CALSCALE:GREGORIAN",
+      "BEGIN:VTODO",
+      "UID:u-1",
+      "DTSTAMP:20260612T080000Z",
+      "SUMMARY:לקנות חלב",
+      "STATUS:NEEDS-ACTION",
+      "END:VTODO",
+      "END:VCALENDAR",
+    ].join("\r\n") + "\r\n",
+  );
+});
+
+test("buildVTodo: timed due / date-only due", () => {
+  const timed = buildVTodo({ uid: "u", title: "t", due: new Date("2026-06-15T09:00:00Z"), dtstamp: STAMP });
+  expect(timed).toContain("DUE:20260615T090000Z");
+  const dateOnly = buildVTodo({ uid: "u", title: "t", due: new Date("2026-06-20T00:00:00Z"), dueDateOnly: true, dtstamp: STAMP });
+  expect(dateOnly).toContain("DUE;VALUE=DATE:20260620");
+});
+
+test("buildVTodo: done emits STATUS/COMPLETED/PERCENT-COMPLETE", () => {
+  const ics = buildVTodo({ uid: "u", title: "t", done: true, completedAt: new Date("2026-06-11T13:00:00Z"), dtstamp: STAMP });
+  expect(ics).toContain("STATUS:COMPLETED");
+  expect(ics).toContain("COMPLETED:20260611T130000Z");
+  expect(ics).toContain("PERCENT-COMPLETE:100");
+});
+
+test("buildVTodo: escapes text fields", () => {
+  const ics = buildVTodo({ uid: "u", title: "a,b;c\nd", notes: "x;y", dtstamp: STAMP });
+  expect(ics).toContain("SUMMARY:a\\,b\\;c\\nd");
+  expect(ics).toContain("DESCRIPTION:x\\;y");
+});
+
+test("roundtrip: parseTodos(buildVTodo(x)) preserves the fields", () => {
+  const ics = buildVTodo({
+    uid: "rt-1", title: "Round trip", due: new Date("2026-06-15T09:00:00Z"),
+    notes: "note", dtstamp: STAMP,
+  });
+  const t = parseTodos(ics)[0];
+  expect(t.uid).toBe("rt-1");
+  expect(t.title).toBe("Round trip");
+  expect(t.due?.toISOString()).toBe("2026-06-15T09:00:00.000Z");
+  expect(t.notes).toBe("note");
+  expect(t.done).toBe(false);
+});
+
+test("roundtrip: a date-only due survives build → parse → build unchanged", () => {
+  const due = new Date(Date.UTC(2026, 5, 20)); // 2026-06-20, UTC midnight
+  const first = buildVTodo({ uid: "rt-2", title: "t", due, dueDateOnly: true, dtstamp: STAMP });
+  expect(first).toContain("DUE;VALUE=DATE:20260620");
+  const reparsed = parseTodos(first)[0];
+  const second = buildVTodo(mergeTask(reparsed, { title: "t2" }, STAMP));
+  // the edit path must NOT shift the day (local-midnight parse vs UTC fmtDate)
+  expect(second).toContain("DUE;VALUE=DATE:20260620");
+});
+
+test("mergeTask: patches fields, clears due with null, completes with done", () => {
+  const base: TaskItem = {
+    uid: "m-1", title: "Old", due: new Date("2026-06-15T09:00:00Z"),
+    done: false, recurring: false, notes: "keep",
+  };
+  const titled = mergeTask(base, { title: "New" }, STAMP);
+  expect(titled.title).toBe("New");
+  expect(titled.due?.toISOString()).toBe("2026-06-15T09:00:00.000Z");
+  expect(titled.notes).toBe("keep");
+  expect(titled.dtstamp).toBe(STAMP);
+
+  const cleared = mergeTask(base, { due: null }, STAMP);
+  expect(cleared.due).toBeUndefined();
+
+  const moved = mergeTask(base, { due: new Date("2026-06-20T00:00:00Z"), dueDateOnly: true }, STAMP);
+  expect(moved.due?.toISOString()).toBe("2026-06-20T00:00:00.000Z");
+  expect(moved.dueDateOnly).toBe(true);
+
+  const finished = mergeTask(base, { done: true, completedAt: new Date("2026-06-12T07:00:00Z") }, STAMP);
+  expect(finished.done).toBe(true);
+  expect(finished.completedAt?.toISOString()).toBe("2026-06-12T07:00:00.000Z");
 });

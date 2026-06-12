@@ -1,6 +1,6 @@
 # Project todo / tracker
 
-Tracker for the Claude Telegram bot — features, bugs, and things to notice.
+Tracker for the Claude Telegram agent — features, bugs, and things to notice.
 
 ## Done
 - [x] **Streaming responses (Approach A)** — live `💭 thinking…` / `🔍 tool…` status then progressive
@@ -77,10 +77,11 @@ and installs the delta. (The auto-compare CLI idea stayed unbuilt — YAGNI.)
 - [x] Voice notes in (speech→text) — SHIPPED 2026-06-11 (PR #14), un-parked from 2026-06-08: speak a voice
   bubble → Groq-hosted whisper-large-v3-turbo transcribes (swappable `transcribe.ts` backend, local
   whisper.cpp path in code for later) → answered like a typed message; 🎤 transcript echo on low confidence.
-- [ ] Project rename to "Telegram agent" — deferred future todo (Maor, 2026-06-11): README/package.json/
-  todolist/DEPLOY wording, vault note + `[[Telegram bot]]` links, memory-file descriptions, and (with
-  explicit confirm) `gh repo rename`. Scope details in the project memory `call-it-telegram-agent.md`.
-  Keep droplet `~/claude-bot` path and the local Windows folder name (tooling is keyed to both).
+- [x] Project rename to "Telegram agent" — DONE 2026-06-12 (Maor's explicit go): README/package.json/
+  todolist/DEPLOY wording, vault note renamed + `[[Telegram bot]]` links updated, memory descriptions,
+  and `gh repo rename` → `Maores/claude-telegram-agent` (GitHub redirects the old URL; droplet remote
+  updated). Kept by design: droplet `~/claude-bot` path, local Windows folder, `@maores_assistant_bot`,
+  memory-file slugs — tooling is keyed to all four.
 - [ ] Morning briefing — 8:00 push: calendar + unread-email summary + weather (and optional headlines).
 - [x] systemd service — DONE 2026-06-11: `/etc/systemd/system/telegram-agent.service` (`Restart=always`,
   journald, EnvironmentFile=.env); @reboot cron removed; kill-test verified (SIGKILL → auto-restart in 5s).

@@ -1,6 +1,6 @@
-# Claude Telegram bot
+# Claude Telegram agent
 
-A 24/7 personal AI assistant on Telegram, powered by the local `claude` CLI
+A 24/7 personal AI agent on Telegram, powered by the local `claude` CLI
 (Claude Pro subscription — no API key). Each message spawns a fresh
 `claude -p` process with your conversation history as context.
 
@@ -24,7 +24,7 @@ pull up specific past exchanges that automatic recall didn't surface.
 |------|---------|
 | `poller.ts` | The long-poll engine (no dependencies) |
 | `start.sh` | Loads `.env` and runs the poller on the VPS |
-| `CLAUDE.md` | Bot identity, permissions, memory rules |
+| `CLAUDE.md` | Agent identity, permissions, memory rules |
 | `access.example.json` | Allowlist template (real `access.json` is server-only) |
 | `.claude/settings.json` | Project permissions |
 | `DEPLOY.md` | Step-by-step VPS deployment |
@@ -35,9 +35,10 @@ gitignored and live only on the server.
 
 ## Deploy
 
-Follow [DEPLOY.md](DEPLOY.md). Short version: create a Telegram bot via
+Follow [DEPLOY.md](DEPLOY.md). Short version: create a Telegram bot account via
 @BotFather, push this repo to GitHub, clone it on a DigitalOcean droplet,
-authenticate Claude, drop in the token + allowlist, and run `start.sh` in tmux.
+authenticate Claude, drop in the token + allowlist, and enable the
+`telegram-agent` systemd service.
 
 ## Run locally (for testing)
 

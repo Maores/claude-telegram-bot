@@ -1,11 +1,11 @@
-# Deploy runbook — Claude Telegram bot on a DigitalOcean VPS
+# Deploy runbook — Claude Telegram agent on a DigitalOcean VPS
 
 Ordered steps to take this repo from zero to a 24/7 bot. Commands marked
 **(local)** run on your Windows machine; **(server)** run on the droplet over SSH.
 
 Placeholders to replace: `<YOUR_SERVER_IP>`, `<YOUR_TOKEN>`,
 `<YOUR_TELEGRAM_USER_ID>`, `<YOUR_NAME>`, `<YOUR_BOT_USERNAME>`, `<YOUR_REGION>`.
-The GitHub repo is already created at `Maores/claude-telegram-bot` (public).
+The GitHub repo is already created at `Maores/claude-telegram-agent` (public).
 
 ---
 
@@ -90,12 +90,12 @@ This repo commits **no secrets** (`.env`, `access.json`, history and memory are
 gitignored), so a **public** GitHub repo is the simplest — it clones with no auth.
 
 The repo is already created and pushed at
-**https://github.com/Maores/claude-telegram-bot** (public), so there's nothing to do
+**https://github.com/Maores/claude-telegram-agent** (public), so there's nothing to do
 locally. **(server)** clone it into `~/claude-bot`:
 
 ```bash
 cd /home/claudebot
-git clone https://github.com/Maores/claude-telegram-bot.git claude-bot
+git clone https://github.com/Maores/claude-telegram-agent.git claude-bot
 cd claude-bot
 ```
 
@@ -237,7 +237,7 @@ evidence and `Restart=always` self-heals). Install the unit:
 ```bash
 sudo tee /etc/systemd/system/telegram-agent.service > /dev/null << 'EOF'
 [Unit]
-Description=Telegram agent poller (claude-telegram-bot)
+Description=Telegram agent poller (claude-telegram-agent)
 After=network-online.target
 Wants=network-online.target
 

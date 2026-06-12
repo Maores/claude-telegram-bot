@@ -114,10 +114,15 @@ chat) and the bot escalates to **Opus** only on explicit/heuristic signals — `
 - (Interview angle: considered the "smart LLM router" design and rejected it on measured-latency grounds.)
 
 ## Bugs & risks
-- [ ] **כפתורי תגובה לתזכורות לא מגיבים מיד** (דווח 2026-06-11) — ROOT-CAUSED same day: the sequential
-  update loop awaits each claude turn before even fetching the next batch, so a button press waits out
-  the whole turn. No small patch fixes it; the non-blocking-loop design is ready for review at
-  `docs/superpowers/specs/2026-06-11-nonblocking-loop-design.md` (also delivers true mid-answer /stop).
+- [x] **כפתורי תגובה לתזכורות לא מגיבים** — fixed in TWO parts. Part 1 (latency): the sequential loop
+  blocked callback ACKs behind whole claude turns — fixed by the non-blocking dispatch loop (PR #18,
+  2026-06-12). Part 2 (dead presses, דווח 2026-06-12 "after the second check"): deploy restarts ate
+  consumed-but-unprocessed updates — the loop saves the Telegram offset at fetch time while handlers run
+  async, and `systemctl restart` killed bun mid-handler (pressed → ACKed → never applied; happened twice,
+  10:05/10:22 deploys). Fixed by PR #23: graceful SIGTERM drain (idle() on both queues, 80s cap),
+  AbortSignal timeout on every tg() fetch (a silent dead socket can no longer hang the loop unlogged),
+  [CB] press logging + a visible "כבר טופל" toast on stale presses, and KillMode=mixed +
+  TimeoutStopSec=90 on the systemd unit. Drain live-verified in the journal 2026-06-12 10:46.
 - [x] **כפתורי follow-up של תזכורת ישנה לא מתנקים** (דווח 2026-06-11) — FIXED same day, PR #15: the nudge
   now strips the original message's keyboard at handover (one live button set per follow-up). Live-verified
   on the droplet with a forced nudge.

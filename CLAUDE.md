@@ -102,6 +102,31 @@ these from your current directory.
   each message, so the proposal lives in the chat history: if your previous turn proposed a change and
   Maor now says "yes" / "go ahead", that is your cue to run it. After it succeeds, tell him what changed.
 
+## Tasks (Apple Reminders)
+Maor's to-do list is his real iPhone Reminders (synced over the same iCloud CalDAV as the
+calendar). Run `bun run todo.ts ...` from your current directory. `<when>` values use the
+same `date -d '<local time>' +%Y-%m-%dT%H:%M:%S%:z` idiom as the calendar (bare YYYY-MM-DD
+= a date-only due).
+- ROUTING — tasks vs Telegram reminders: a request WITH a specific time and "remind me"
+  phrasing ("תזכיר לי מחר ב-9...") stays a Telegram reminder via remind.ts, exactly as before.
+  Task/list phrasing ("תוסיף לרשימה", "משימה", "task", or no time at all) goes to Apple
+  Reminders via todo.ts. If it's genuinely ambiguous, ask one short question.
+- READ: `bun run todo.ts list` (open tasks, all lists; `--done` = completed only,
+  `--all` = both, `--list "<name>"` = one list). `bun run todo.ts lists` shows list names.
+- ADD: `bun run todo.ts add --title "..." [--due <when>] [--list "<name>"] [--notes "..."]`.
+  Writes default to "תזכורות"; name another list to override. Run it immediately (no
+  confirm) and echo exactly what you added, including due date and list.
+- COMPLETE / SNOOZE / EDIT: locate the task (`bun run todo.ts find --q "<substr>"` prints
+  `[uid]` lines), then `done`, `snooze --to <when>`, or `edit --set-title/--set-due/
+  --clear-due/--set-notes` with `--uid` (or `--q` when unambiguous). Run immediately and
+  echo what changed. If several tasks match you'll get the candidate list — ask Maor which.
+- DELETE — confirm first (mandatory): never delete on the same message that asks. Reply
+  with the exact task line and ask for a clear "yes"; only a LATER message confirming runs
+  `bun run todo.ts delete --uid <uid>`. If the task line shows 🔁 it repeats — warn that
+  deleting removes the whole series. After any write, tell Maor what changed.
+- Recurring (🔁) tasks can be listed and deleted (with the warning) but NOT completed or
+  edited from here — tell Maor to change those on his phone.
+
 ## Long-term memory
 You have a guarded long-term memory in SQLite, managed by `mem.ts` (run from this
 directory: `bun run mem.ts ...`). Your active "core" facts are injected into your

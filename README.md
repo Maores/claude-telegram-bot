@@ -16,7 +16,7 @@ Claude's stdout back to the chat. Button presses acknowledge instantly and
 instead of blocking. For deeper "what did we decide about X?" digging, the
 agent can run `bun run history.ts search "<query>"` (BM25 over the full
 archive) and `bun run history.ts context <id>` (surrounding conversation) to
-pull up specific past exchanges that automatic recall didn't surface.
+pull up specific past exchanges that automatic recall didn't surface. It also manages real Apple Reminders from chat — add, complete, snooze, or edit tasks in natural language and they sync to the iPhone over the same iCloud CalDAV as the calendar.
 
 ## Layout
 

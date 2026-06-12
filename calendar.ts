@@ -23,7 +23,7 @@ export interface CalEvent {
 
 let clientPromise: ReturnType<typeof createDAVClient> | null = null;
 
-function client() {
+export function client() {
   const username = process.env.ICLOUD_USER;
   const password = process.env.ICLOUD_APP_PASSWORD;
   if (!username || !password) {
@@ -179,7 +179,7 @@ export interface EventInput {
 }
 
 /** RFC-5545 TEXT escaping: backslash first, then newlines, semicolons, commas. */
-function escapeText(s: string): string {
+export function escapeText(s: string): string {
   return s
     .replace(/\\/g, "\\\\")
     .replace(/\r\n|\r|\n/g, "\\n")
@@ -188,7 +188,7 @@ function escapeText(s: string): string {
 }
 
 /** UTC timestamp form, e.g. 20260610T150000Z. */
-function fmtUTC(d: Date): string {
+export function fmtUTC(d: Date): string {
   return (
     String(d.getUTCFullYear()).padStart(4, "0") +
     pad(d.getUTCMonth() + 1) +
@@ -202,7 +202,7 @@ function fmtUTC(d: Date): string {
 }
 
 /** Date-only form for all-day events, e.g. 20260610. */
-function fmtDate(d: Date): string {
+export function fmtDate(d: Date): string {
   return String(d.getUTCFullYear()).padStart(4, "0") + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate());
 }
 

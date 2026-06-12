@@ -162,6 +162,7 @@ Tuning (all optional, in the same `.env`):
 | `VOICE_MAX_SEC` | `300` | longest voice note accepted |
 | `VOICE_ECHO_BELOW` | `0.6` | echo the transcript when confidence is below this; `0` = never echo |
 | `VOICE_TIMEOUT_MS` | `45000` | transcription timeout |
+| `POLL_SERIAL` | unset | `1` reverts to the old strictly-sequential update loop (rollback switch; expect button lag + queued /stop again) |
 
 **Local backend (keyless, deferred — for a bigger droplet someday):**
 

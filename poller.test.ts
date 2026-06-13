@@ -20,6 +20,8 @@ import {
   voicePromptText,
   voiceHistoryNote,
   shouldDeclineUnreadable,
+  parsePaCallback,
+  paKeyboard,
 } from "./poller.ts";
 
 test("short text stays one chunk", () => {
@@ -347,4 +349,19 @@ test("shouldDeclineUnreadable declines only when nothing at all is actionable", 
   expect(shouldDeclineUnreadable({ path: "/up/x.pdf", kind: "a file" }, "", null)).toBe(false); // attachment
   // THE Task 8 regression: a transcribed voice note has empty words + no attachment.
   expect(shouldDeclineUnreadable(null, "", "תזכיר לי מחר")).toBe(false);
+});
+
+test("parsePaCallback accepts ok/no and rejects junk", () => {
+  expect(parsePaCallback("pa:ok:pa17812345671")).toEqual({ action: "ok", id: "pa17812345671" });
+  expect(parsePaCallback("pa:no:pa17812345671")).toEqual({ action: "no", id: "pa17812345671" });
+  expect(parsePaCallback("pa:maybe:x")).toBeNull();
+  expect(parsePaCallback("fu:done:x")).toBeNull();
+  expect(parsePaCallback("")).toBeNull();
+});
+
+test("paKeyboard carries the proposal id in both buttons", () => {
+  const kb: any = paKeyboard("pa123");
+  const flat = kb.inline_keyboard.flat();
+  expect(flat.map((b: any) => b.callback_data)).toEqual(["pa:ok:pa123", "pa:no:pa123"]);
+  expect(flat.map((b: any) => b.text)).toEqual(["✓ אשר", "✗ בטל"]);
 });

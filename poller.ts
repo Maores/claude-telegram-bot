@@ -18,6 +18,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { popDue, addOnce, addFollowup, getFollowup, resolveFollowup, rebindFollowup, markNudged, dueNudges, pruneFollowups, fmt } from "./reminders.ts";
+import { takePending, consumeAction, validateArgv, pruneActions, newTurnId, type PendingAction } from "./pending.ts";
 import { StreamParser, displayText } from "./stream.ts";
 import { pickModel } from "./model.ts";
 import { upcomingEvents, nudgeKey, loadNotified, saveNotified, pruneNotified } from "./calendar.ts";
@@ -291,6 +292,30 @@ export function snoozeKeyboard(id: string): unknown {
       { text: "+1 שעה", callback_data: `fu:s1h:${id}` },
       { text: "הערב 20:00", callback_data: `fu:seve:${id}` },
       { text: "מחר 09:00", callback_data: `fu:stom:${id}` },
+    ]],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Inline-button callbacks: pending-action approvals (confirm buttons)
+// callback_data protocol: "pa:<ok|no>:<actionId>"
+// ---------------------------------------------------------------------------
+
+export interface PaCallback {
+  action: "ok" | "no";
+  id: string;
+}
+
+export function parsePaCallback(data: string): PaCallback | null {
+  const m = /^pa:(ok|no):([\w-]+)$/.exec(data ?? "");
+  return m ? { action: m[1] as PaCallback["action"], id: m[2] } : null;
+}
+
+export function paKeyboard(id: string): unknown {
+  return {
+    inline_keyboard: [[
+      { text: "✓ אשר", callback_data: `pa:ok:${id}` },
+      { text: "✗ בטל", callback_data: `pa:no:${id}` },
     ]],
   };
 }
@@ -941,13 +966,15 @@ async function handleMessage(msg: TgMessage) {
 
     const echoPrefix =
       voiceText !== null && shouldEchoTranscript(voiceConfidence) ? `🎤 «${userMsg}»\n\n` : "";
+    const turnId = newTurnId();
+    const baseOpts = echoPrefix ? { renderPrefix: echoPrefix } : {};
     const answer =
       (await streamClaude(
         buildPrompt(history, name, messageForClaude, recall, loadMemory(), skills),
         chatId,
         placeholderId,
         model,
-        echoPrefix ? { renderPrefix: echoPrefix } : {},
+        { ...baseOpts, env: { TELEGRAM_TURN_ID: turnId } },
       )).trim() || "(no output)";
 
     const now = Math.floor(Date.now() / 1000);
@@ -958,6 +985,7 @@ async function handleMessage(msg: TgMessage) {
       // Reply already delivered; a persistence hiccup must not trigger the error reply.
       console.error(`[ERR] persist message: ${e?.message ?? e}`);
     }
+    await sendPendingProposals(chatId, turnId);
     console.log(`[DONE] replied to ${fromId}`);
     void setReaction(chatId, msg.message_id, outcomeReaction(true));
     // Self-improvement pass (Phase 7): detached, cooldown-gated, never blocks.
@@ -1001,8 +1029,11 @@ async function handleMessage(msg: TgMessage) {
  *  allowlist-check, then route by namespace. Every press logs one [CB] line —
  *  silent dead buttons cost a forensic hunt on 2026-06-12. */
 async function handleCallback(cq: NonNullable<TgUpdate["callback_query"]>) {
-  const parsed = parseFuCallback(cq.data ?? "");
-  console.log(`[CB] ${parsed ? `${parsed.action}:${parsed.id}` : `?:${(cq.data ?? "").slice(0, 24)}`} from ${cq.from.id}`);
+  const pa = parsePaCallback(cq.data ?? "");
+  const parsed = pa ? null : parseFuCallback(cq.data ?? "");
+  console.log(
+    `[CB] ${pa ? `pa:${pa.action}:${pa.id}` : parsed ? `${parsed.action}:${parsed.id}` : `?:${(cq.data ?? "").slice(0, 24)}`} from ${cq.from.id}`,
+  );
   const ack = (text?: string) =>
     tg("answerCallbackQuery", { callback_query_id: cq.id, ...(text ? { text } : {}) }).catch(() => {});
   if (!loadAllowList().has(String(cq.from.id))) {
@@ -1011,8 +1042,12 @@ async function handleCallback(cq: NonNullable<TgUpdate["callback_query"]>) {
   }
   const chatId = cq.message?.chat.id;
   const messageId = cq.message?.message_id;
-  if (!parsed || chatId == null || messageId == null) {
+  if (chatId == null || messageId == null || (!pa && !parsed)) {
     await ack(); // unknown namespace — ignore
+    return;
+  }
+  if (pa) {
+    await handlePaCallback(cq, pa, chatId, messageId, ack);
     return;
   }
 
@@ -1059,6 +1094,92 @@ async function handleCallback(cq: NonNullable<TgUpdate["callback_query"]>) {
     }).catch(() => {});
     console.log(`[REMIND] snoozed fu ${f.id} to ${fmt(t)}`);
   }
+}
+
+/** Send one ✓/✗ message per proposal the just-finished turn registered. */
+async function sendPendingProposals(chatId: number, turnId: string) {
+  let actions: PendingAction[] = [];
+  try {
+    actions = takePending(chatId, turnId);
+  } catch (e: any) {
+    console.error(`[ERR] pending pickup: ${e?.message ?? e}`);
+    return;
+  }
+  for (const a of actions) {
+    await tg("sendMessage", {
+      chat_id: chatId,
+      text: `🔘 ${a.summary}`,
+      reply_markup: paKeyboard(a.id),
+    }).catch(() => {});
+    console.log(redact(`[PA] proposed ${a.id}: ${a.summary}`));
+  }
+}
+
+/** ✓/✗ tap on a proposal: consume once-only, validate, execute the frozen
+ *  argv directly (no shell), and turn the proposal message into the receipt. */
+async function handlePaCallback(
+  cq: NonNullable<TgUpdate["callback_query"]>,
+  parsed: PaCallback,
+  chatId: number,
+  messageId: number,
+  ack: (text?: string) => Promise<unknown>,
+) {
+  const r = consumeAction(parsed.id, parsed.action === "ok" ? "approved" : "cancelled", Math.floor(Date.now() / 1000));
+  if (r.outcome === "stale") {
+    console.log(`[PA] stale ${parsed.id}`);
+    await ack("הכפתור הזה כבר טופל");
+    await tg("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+    return;
+  }
+  if (r.outcome === "expired") {
+    console.log(`[PA] expired ${parsed.id}`);
+    await ack("פג תוקף — בקש ממני שוב");
+    await tg("editMessageText", { chat_id: chatId, message_id: messageId, text: `⌛ פג תוקף — ${cq.message?.text ?? ""}`.trim() }).catch(() => {});
+    return;
+  }
+  const a = r.action;
+  if (a.chatId !== chatId) {
+    // Forged/cross-chat callback_data: consume but never execute (fail-safe).
+    console.error(`[PA] chat mismatch ${a.id}: entry ${a.chatId} vs tap ${chatId}`);
+    await ack("הכפתור הזה כבר טופל");
+    return;
+  }
+  if (parsed.action === "no") {
+    await ack();
+    await tg("editMessageText", { chat_id: chatId, message_id: messageId, text: `✗ בוטל — ${a.summary}` }).catch(() => {});
+    console.log(`[PA] cancelled ${a.id}`);
+    return;
+  }
+  const v = validateArgv(a.argv);
+  if (!v.ok) {
+    // Should be unreachable (validated at propose) — refuse loudly, stay consumed.
+    console.error(`[PA] blocked at execution ${a.id}: ${v.reason}`);
+    await ack();
+    await tg("editMessageText", { chat_id: chatId, message_id: messageId, text: `⚠️ נחסם — ${a.summary}` }).catch(() => {});
+    return;
+  }
+  await ack();
+  // Detached: a slow CalDAV write must not block the callback chain (its <2s
+  // job contract keeps every other button instant — see SerialChain). The
+  // once-only consumption above already guarantees this runs at most once.
+  void (async () => {
+    const proc = Bun.spawn(a.argv, { cwd: PROJECT_DIR, stdout: "pipe", stderr: "pipe" });
+    const killer = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {}
+    }, 30_000);
+    const [out, err, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    clearTimeout(killer);
+    const firstLine = (code === 0 ? out : err || out).trim().split("\n")[0] ?? "";
+    const text = code === 0 ? `✓ ${a.summary}\n${firstLine}` : `⚠️ נכשל — ${a.summary}\n${firstLine}`;
+    await tg("editMessageText", { chat_id: chatId, message_id: messageId, text }).catch(() => {});
+    console.log(redact(`[PA] ${code === 0 ? "executed" : "FAILED"} ${a.id}: ${firstLine}`));
+  })().catch((e: any) => console.error(`[ERR] pa exec ${a.id}: ${e?.message ?? e}`));
 }
 
 /** /stop at dispatch level: kill the running child AND drop that chat's
@@ -1127,7 +1248,13 @@ async function checkReminders() {
         }
         const fullPrompt = buildPrompt([], "Maor", autoPrompt, [], loadMemory(), skills);
         // Unattended run → least-privilege: can't schedule reminders or file drafts.
-        await streamClaude(fullPrompt, r.chatId, ph.message_id, "sonnet", autoSessionSpawn());
+        const turnId = newTurnId();
+        const auto = autoSessionSpawn();
+        await streamClaude(fullPrompt, r.chatId, ph.message_id, "sonnet", {
+          ...auto,
+          env: { ...(auto.env ?? {}), TELEGRAM_TURN_ID: turnId },
+        });
+        await sendPendingProposals(r.chatId, turnId);
       } else {
         if (r.repeat) {
           await tg("sendMessage", { chat_id: r.chatId, text: `⏰ Reminder: ${r.text}` });
@@ -1184,6 +1311,11 @@ async function checkReminders() {
     pruneFollowups(nowS);
   } catch (e: any) {
     console.error(`[ERR] prune: ${e?.message ?? e}`);
+  }
+  try {
+    pruneActions(nowS);
+  } catch (e: any) {
+    console.error(`[ERR] pending prune: ${e?.message ?? e}`);
   }
 }
 

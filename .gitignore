@@ -6,6 +6,7 @@ skills/
 reminders/
 reminders.json
 reminders.test.tmp.json
+pending.json
 cal_notified.json
 *.tmp
 *.log

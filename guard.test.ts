@@ -199,4 +199,24 @@ describe("checkAutoSession", () => {
   test("still applies the hardline floor inside AUTO sessions", () => {
     expect(checkAutoSession("Bash", "rm -rf /").verdict).toBe("block");
   });
+
+  test("[AUTO] sessions may not approve pending actions, but may propose/cancel/list", () => {
+    expect(checkAutoSession("Bash", "bun run confirm.ts approve pa123").verdict).toBe("block");
+    expect(checkAutoSession("Bash", "cd /x && bun run confirm.ts  approve pa123").verdict).toBe("block");
+    expect(checkAutoSession("Bash", "bun run confirm.ts propose --summary x --argv-json '[]'").verdict).toBe("allow");
+    expect(checkAutoSession("Bash", "bun run confirm.ts cancel pa123").verdict).toBe("allow");
+    expect(checkAutoSession("Bash", "bun run confirm.ts list").verdict).toBe("allow");
+  });
+
+  test("[AUTO] sessions may not run confirm-gated writes directly (propose instead)", () => {
+    expect(checkAutoSession("Bash", "bun run cal.ts add --title x --start 2026-06-13").verdict).toBe("block");
+    expect(checkAutoSession("Bash", "bun run cal.ts edit --uid u --set-title y").verdict).toBe("block");
+    expect(checkAutoSession("Bash", "bun run cal.ts delete --uid u").verdict).toBe("block");
+    expect(checkAutoSession("Bash", "bun run todo.ts delete --uid u").verdict).toBe("block");
+    expect(checkAutoSession("Bash", "bun run cal.ts list 2026-06-12T00:00:00Z 2026-06-13T00:00:00Z").verdict).toBe("allow");
+    expect(checkAutoSession("Bash", "bun run cal.ts find --from a --to b").verdict).toBe("allow");
+    expect(checkAutoSession("Bash", "bun run todo.ts list").verdict).toBe("allow");
+    expect(checkAutoSession("Bash", "bun run todo.ts add --title x").verdict).toBe("allow");
+    expect(checkAutoSession("Bash", "bun run todo.ts done --q x").verdict).toBe("allow");
+  });
 });
